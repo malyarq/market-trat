@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "MarketTrat",
-  "version": "0.5.0",
-  "description": "Собирает расходы из чеков Ozon и Wildberries, учитывает возвраты и экспортирует CSV.",
+  "version": "0.6.0",
+  "description": "Собирает расходы из чеков Ozon, Wildberries и Яндекс Маркета, учитывает возвраты и экспортирует CSV.",
   "permissions": [
     "activeTab",
     "cookies",
@@ -16,7 +16,9 @@
     "https://www.wildberries.ru/*",
     "https://wildberries.ru/*",
     "https://astro.wildberries.ru/*",
-    "https://receipt.wb.ru/*"
+    "https://receipt.wb.ru/*",
+    "https://market.yandex.ru/*",
+    "https://check.yandex.ru/*"
   ],
   "action": {
     "default_title": "MarketTrat"

@@ -1126,22 +1126,417 @@
     };
   }
 
+  const yandexReceiptsResolver = 'src/resolvers/orderDocuments/resolveOrderReceiptsByOrderId:resolveOrderReceiptsByOrderId';
+  const yandexOrdersResolvers = [
+    'src/resolvers/orders/resolveConsolidationOrders/index:resolveConsolidationOrders',
+    'src/resolvers/orders/resolveConsolidationOrders:resolveConsolidationOrders'
+  ];
+
+  function decodeHtmlEntities(text) {
+    return String(text || '')
+      .replace(/&#x([0-9a-f]+);/gi, (_, value) => String.fromCharCode(parseInt(value, 16)))
+      .replace(/&#(\d+);/g, (_, value) => String.fromCharCode(Number(value)))
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>');
+  }
+
+  function extractYandexOrderIdsFromHtml(html) {
+    const ids = new Set();
+    const text = decodeHtmlEntities(html);
+    for (const match of text.matchAll(/\/my\/order\/(\d+)/g)) ids.add(match[1]);
+    for (const match of text.matchAll(/"orderGroupIds"\s*:\s*\[([\s\S]*?)\]/g)) {
+      for (const id of match[1].match(/\d{6,}/g) || []) ids.add(id);
+    }
+    return [...ids];
+  }
+
+  function extractYandexPageTokenFromHtml(html) {
+    const text = decodeHtmlEntities(html);
+    const match = text.match(/"pageToken"\s*:\s*"((?:\\.|[^"\\])*)"/);
+    return match?.[1] ? decodeJsonString(match[1]) : '';
+  }
+
+  function hasYandexNextOrdersPage(html) {
+    return /"hasNext"\s*:\s*true/.test(decodeHtmlEntities(html));
+  }
+
+  function extractYandexHeaderValue(html, key) {
+    const text = decodeHtmlEntities(html);
+    const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return text.match(new RegExp(`"${escaped}"\\s*:\\s*"([^"]+)"`))?.[1] || '';
+  }
+
+  function yandexClientHeaders(path) {
+    const html = document.documentElement?.innerHTML || '';
+    const pageId = /^\/my\/order\/\d+/.test(path)
+      ? 'market:order'
+      : extractYandexHeaderValue(html, 'page') || 'market:orders';
+    const headers = {
+      'x-market-apphost-target': 'WEB',
+      'x-market-core-service': '<UNKNOWN>',
+      'x-market-page-id': pageId
+    };
+    const sk = extractYandexHeaderValue(html, 'sk');
+    const version = extractYandexHeaderValue(html, '-version') || extractYandexHeaderValue(html, 'version');
+    const frontGlue = extractYandexHeaderValue(html, 'marketFrontGlue');
+    if (sk) headers.sk = sk;
+    if (version) headers['x-market-app-version'] = version;
+    if (frontGlue) headers['x-market-front-glue'] = frontGlue;
+    return headers;
+  }
+
+  function yandexRetryDelay(response, attempt) {
+    const retryAfter = Number(response.headers.get('retry-after'));
+    if (Number.isFinite(retryAfter) && retryAfter > 60) {
+      throw new Error(`Yandex resolve 429: лимит Яндекса, повторите примерно через ${Math.ceil(retryAfter / 60)} мин`);
+    }
+    if (Number.isFinite(retryAfter) && retryAfter > 0) return Math.min(15000, retryAfter * 1000);
+    return Math.min(15000, 1500 * (2 ** attempt));
+  }
+
+  async function fetchYandexResolve(resolver, params, path, pauseMs = 0) {
+    const url = new URL('/api/resolve/', location.origin);
+    url.searchParams.set('r', resolver);
+    const retpath = new URL(path, location.origin).href;
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (pauseMs > 0 && attempt === 0) await sleep(pauseMs);
+      const response = await fetch(url.toString(), {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          accept: '*/*',
+          'content-type': 'application/json',
+          ...yandexClientHeaders(path),
+          'x-requested-with': 'XMLHttpRequest',
+          'x-retpath-y': retpath
+      },
+      body: JSON.stringify({
+        params: Array.isArray(params) ? params : [params],
+        path
+      })
+    });
+
+      if (response.ok) return response.json();
+      if (response.status !== 429 || attempt === 2) throw new Error(`Yandex resolve ${response.status}`);
+      const delay = yandexRetryDelay(response, attempt);
+      sendProgress(`Яндекс Маркет: 429, пауза ${Math.round(delay / 1000)}с.`);
+      await sleep(delay);
+    }
+
+    throw new Error('Yandex resolve failed');
+  }
+
+  async function fetchYandexResolveAny(resolvers, params, path, pauseMs = 0) {
+    let lastError = null;
+    for (const resolver of resolvers) {
+      try {
+        return await fetchYandexResolve(resolver, params, path, pauseMs);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError || new Error('Yandex resolve failed');
+  }
+
+  function collectYandexOrderIdsFromDom() {
+    const ids = new Set(extractYandexOrderIdsFromHtml(document.documentElement?.innerHTML || ''));
+    for (const link of document.querySelectorAll('a[href*="/my/order/"]')) {
+      const id = String(link.href || link.getAttribute('href') || '').match(/\/my\/order\/(\d+)/)?.[1];
+      if (id) ids.add(id);
+    }
+    return [...ids].filter((id) => /^\d+$/.test(id));
+  }
+
+  function yandexScrollContainers() {
+    const scrolling = document.scrollingElement || document.documentElement;
+    const containers = [scrolling];
+    for (const element of document.querySelectorAll('main, [data-auto], [class]')) {
+      if (element.scrollHeight > element.clientHeight + 200) containers.push(element);
+    }
+    return [...new Set(containers)]
+      .sort((left, right) => right.scrollHeight - left.scrollHeight)
+      .slice(0, 5);
+  }
+
+  function clickYandexMoreButton() {
+    const labels = ['показать ещё', 'показать еще', 'загрузить ещё', 'загрузить еще'];
+    for (const element of document.querySelectorAll('button, [role="button"], a')) {
+      const text = String(element.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (!labels.some((label) => text.includes(label))) continue;
+      if (element.disabled || element.getAttribute('aria-disabled') === 'true') continue;
+      element.click();
+      return true;
+    }
+    return false;
+  }
+
+  async function scrollYandexOrders(maxRounds) {
+    const orderIds = new Set();
+    let stableRounds = 0;
+    let previousHeight = 0;
+
+    for (let round = 0; round < maxRounds; round += 1) {
+      const before = orderIds.size;
+      for (const id of collectYandexOrderIdsFromDom()) orderIds.add(id);
+
+      const containers = yandexScrollContainers();
+      const delta = Math.max(700, Math.floor((window.innerHeight || 900) * 0.9));
+      for (const container of containers) {
+        container.scrollTop += delta;
+      }
+      window.scrollBy(0, delta);
+      window.dispatchEvent(new WheelEvent('wheel', { deltaY: delta, bubbles: true, cancelable: true }));
+      const clickedMore = clickYandexMoreButton();
+      await sleep(450);
+
+      for (const id of collectYandexOrderIdsFromDom()) orderIds.add(id);
+      const height = Math.max(...containers.map((item) => item.scrollHeight), document.body.scrollHeight, document.documentElement.scrollHeight);
+      const changed = orderIds.size > before || height > previousHeight || clickedMore;
+      stableRounds = changed ? 0 : stableRounds + 1;
+      previousHeight = height;
+
+      if (round === 0 || orderIds.size > before || round % 5 === 4) {
+        sendProgress(`Яндекс Маркет: найдено заказов ${orderIds.size}, скролл ${round + 1}.`, round + 1, maxRounds);
+      }
+      if (stableRounds >= 10) break;
+    }
+
+    return orderIds;
+  }
+
+  function yandexResolveData(json) {
+    return json?.results?.[0]?.data || json?.data || {};
+  }
+
+  function yandexResultData(json, index) {
+    return json?.results?.[index]?.data || (index === 0 ? json?.data : {}) || {};
+  }
+
+  function parseYandexOrdersResolve(json) {
+    const data = yandexResolveData(json);
+    const collection = data.collections?.orderConsolidationResult || {};
+    const resultId = Array.isArray(data.result) ? data.result[0] : data.result;
+    const item = collection[resultId] || Object.values(collection)[0] || {};
+    const ids = item.ordersGroupsIds || item.orderGroupIds || [];
+    return {
+      ids: ids.map(String).filter((id) => /^\d+$/.test(id)),
+      pageToken: item.pageToken || ''
+    };
+  }
+
+  function parseYandexReceiptsData(data, orderId) {
+    const collection = data.collections?.orderReceipt || {};
+    const ids = Array.isArray(data.result) ? data.result : [];
+    return ids
+      .map((id) => collection[id] || collection[String(id)])
+      .filter((receipt) => receipt?.fiscalUrl)
+      .map((receipt) => ({
+        orderId,
+        id: receipt.id || '',
+        type: receipt.type || '',
+        createdAt: receipt.createdAt || 0,
+        fiscalUrl: receipt.fiscalUrl
+      }));
+  }
+
+  function parseYandexReceiptsResolve(json, orderId) {
+    return parseYandexReceiptsData(yandexResolveData(json), orderId);
+  }
+
+  function chunkItems(items, size) {
+    const chunks = [];
+    for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+    return chunks;
+  }
+
+  async function fetchYandexReceiptBatch(orderIds, archived, pauseMs) {
+    const json = await fetchYandexResolve(
+      yandexReceiptsResolver,
+      orderIds.map((orderId) => ({ orderId: Number(orderId), archived })),
+      '/my/orders?filter=COMPLETED',
+      pauseMs
+    );
+    return orderIds.map((orderId, index) => ({
+      orderId,
+      archived,
+      receipts: parseYandexReceiptsData(yandexResultData(json, index), orderId)
+    }));
+  }
+
+  async function fetchYandexReceiptBatchSafe(orderIds, archived, pauseMs) {
+    try {
+      return await fetchYandexReceiptBatch(orderIds, archived, pauseMs);
+    } catch (error) {
+      if (orderIds.length === 1) {
+        return [{ orderId: orderIds[0], archived, receipts: [], error: error.message }];
+      }
+      const middle = Math.ceil(orderIds.length / 2);
+      const [left, right] = await Promise.all([
+        fetchYandexReceiptBatchSafe(orderIds.slice(0, middle), archived, pauseMs),
+        fetchYandexReceiptBatchSafe(orderIds.slice(middle), archived, pauseMs)
+      ]);
+      return [...left, ...right];
+    }
+  }
+
+  async function collectYandex({ maxPages, apiPauseMs, receiptConcurrency, metadataOnly }) {
+    if (!/^https:\/\/market\.yandex\.ru\//.test(location.href)) {
+      throw new Error('Яндекс Маркет: открыта не вкладка market.yandex.ru.');
+    }
+
+    const startHtml = document.documentElement?.innerHTML || await fetchText(`${location.origin}/my/orders?filter=COMPLETED`);
+    const orderIds = new Set();
+    for (const id of extractYandexOrderIdsFromHtml(startHtml)) orderIds.add(id);
+
+    const currentOrder = location.pathname.match(/^\/my\/order\/(\d+)/)?.[1];
+    if (currentOrder) orderIds.add(currentOrder);
+
+    let pageToken = extractYandexPageTokenFromHtml(startHtml);
+    let pagesFetched = orderIds.size ? 1 : 0;
+    const shouldTryNext = hasYandexNextOrdersPage(startHtml);
+
+    if (pageToken && shouldTryNext) {
+      while (pagesFetched < maxPages) {
+        try {
+          const page = parseYandexOrdersResolve(await fetchYandexResolveAny(
+            yandexOrdersResolvers,
+            { pageToken, filter: 'COMPLETED', size: 18 },
+            '/my/orders?filter=COMPLETED',
+            apiPauseMs
+          ));
+          pagesFetched += 1;
+          for (const id of page.ids) orderIds.add(id);
+          sendProgress(`Яндекс Маркет: найдено заказов ${orderIds.size}, API-страница ${pagesFetched}.`, pagesFetched, maxPages);
+          if (!page.pageToken || !page.ids.length) break;
+          pageToken = page.pageToken;
+          if (apiPauseMs > 0) await sleep(apiPauseMs);
+        } catch (error) {
+          sendProgress(`Яндекс Маркет: пагинация недоступна, беру найденные заказы (${error.message}).`);
+          break;
+        }
+      }
+    }
+
+    if (!orderIds.size) {
+      for (const id of await scrollYandexOrders(Math.min(maxPages, 200))) orderIds.add(id);
+    }
+
+    if (!orderIds.size) {
+      throw new Error('Яндекс Маркет: заказы не найдены. Проверьте вход и откройте /my/orders?filter=COMPLETED.');
+    }
+
+    const ids = [...orderIds];
+    if (metadataOnly) {
+      return {
+        orderIds: ids,
+        headers: yandexClientHeaders('/my/orders?filter=COMPLETED'),
+        stats: {
+          orders: ids.length,
+          apiPages: pagesFetched
+        }
+      };
+    }
+
+    const receiptsByUrl = new Map();
+    const failedByOrder = new Map();
+    const pendingOrderIds = new Set(ids);
+    let archivedOrders = 0;
+    let noReceiptOrders = 0;
+    let completed = 0;
+    const concurrency = clampConcurrency(receiptConcurrency, 1, 2);
+    const batchSize = 8;
+    if (!yandexClientHeaders('/my/order/0').sk) {
+      sendProgress('Яндекс Маркет: sk-токен не найден в странице, запросы чеков могут вернуться 403.');
+    }
+
+    async function collectArchivedFlag(orderIds, archived) {
+      const batches = chunkItems(orderIds, batchSize);
+      await mapWithConcurrency(batches, concurrency, async (batch) => {
+        const results = await fetchYandexReceiptBatchSafe(batch, archived, apiPauseMs);
+        for (const result of results) {
+          if (result.error) {
+            failedByOrder.set(result.orderId, `${failedByOrder.get(result.orderId) || ''}${archived}: ${result.error}; `);
+            if (archived) {
+              pendingOrderIds.delete(result.orderId);
+              completed += 1;
+            }
+          } else if (!result.receipts.length) {
+            if (archived) {
+              pendingOrderIds.delete(result.orderId);
+              if (!failedByOrder.has(result.orderId)) noReceiptOrders += 1;
+              completed += 1;
+            }
+          } else {
+            if (result.archived) archivedOrders += 1;
+            for (const receipt of result.receipts) receiptsByUrl.set(receipt.fiscalUrl, receipt);
+            failedByOrder.delete(result.orderId);
+            pendingOrderIds.delete(result.orderId);
+            completed += 1;
+          }
+        }
+        if (completed === ids.length || completed % 20 === 0) {
+          sendProgress(`Яндекс Маркет: чеки ${completed}/${ids.length}, ссылок ${receiptsByUrl.size}.`, completed, ids.length);
+        }
+      });
+    }
+
+    await collectArchivedFlag(ids, false);
+    if (pendingOrderIds.size) await collectArchivedFlag([...pendingOrderIds], true);
+
+    const failedOrders = [...failedByOrder.entries()]
+      .filter(([orderId]) => !pendingOrderIds.has(orderId))
+      .map(([orderId, error]) => `${orderId}: ${error.trim()}`);
+
+    if (!receiptsByUrl.size) {
+      const details = failedOrders.slice(0, 3).join('; ');
+      throw new Error(`Яндекс Маркет: ссылки на чеки не найдены. Заказов проверено: ${ids.length}.${details ? ` Ошибки: ${details}.` : ''}`);
+    }
+
+    return {
+      receipts: [...receiptsByUrl.values()],
+      stats: {
+        orders: ids.length,
+        receipts: receiptsByUrl.size,
+        apiPages: pagesFetched,
+        archivedOrders,
+        noReceiptOrders,
+        failedOrders: failedOrders.length,
+        failedOrderSamples: failedOrders.slice(0, 10)
+      }
+    };
+  }
+
   api.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type !== 'SPEND_COLLECT_SOURCE') return false;
 
     const options = message.options || {};
-    const promise = message.source === 'ozon'
-      ? collectOzon({
+    let promise;
+    if (message.source === 'ozon') {
+      promise = collectOzon({
         maxPages: Math.max(1, Number(options.maxPages) || 1000),
         parsePdf: options.parsePdf !== false,
         pdfConcurrency: options.pdfConcurrency,
         apiPauseMs: Math.max(0, Number(options.apiPauseMs) || 0)
-      })
-      : collectWildberries({
+      });
+    } else if (message.source === 'wildberries') {
+      promise = collectWildberries({
         maxPages: Math.max(1, Number(options.maxPages) || 2000),
         pageSize: Math.max(1, Math.min(100, Number(options.pageSize) || 10)),
         apiPauseMs: Math.max(0, Number(options.apiPauseMs) || 0)
       });
+    } else if (message.source === 'yandex') {
+      promise = collectYandex({
+        maxPages: Math.max(1, Number(options.maxPages) || 200),
+        apiPauseMs: Math.max(0, Number(options.apiPauseMs) || 0),
+        receiptConcurrency: options.receiptConcurrency,
+        metadataOnly: options.metadataOnly === true
+      });
+    } else {
+      promise = Promise.reject(new Error(`${message.source}: неизвестный источник`));
+    }
 
     promise
       .then((result) => sendResponse({ ok: true, ...result }))

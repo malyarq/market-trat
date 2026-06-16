@@ -13,6 +13,8 @@
   --primary-hover: #111827;
   --ozon: #005bff;
   --wb: #cb11ab;
+  --yandex: #f2c200;
+  --progress-fill: linear-gradient(90deg, var(--ozon), var(--wb), var(--yandex));
   --danger: #dc2626;
   --ring: rgba(0, 91, 255, 0.24);
   --shadow: 0 16px 34px rgba(17, 24, 39, 0.08);
@@ -189,6 +191,11 @@ p {
   background: var(--wb);
 }
 
+.source-badge.yandex {
+  background: var(--yandex);
+  color: #111827;
+}
+
 button,
 select,
 input[type="date"] {
@@ -340,12 +347,12 @@ progress::-webkit-progress-bar {
 
 progress::-webkit-progress-value {
   border-radius: 999px;
-  background: linear-gradient(90deg, var(--ozon), var(--wb));
+  background: var(--progress-fill);
 }
 
 progress::-moz-progress-bar {
   border-radius: 999px;
-  background: linear-gradient(90deg, var(--ozon), var(--wb));
+  background: var(--progress-fill);
 }
 
 .warning-banner {

@@ -56,6 +56,7 @@
     const source = String(value || '').trim().toLowerCase();
     if (source === 'wb' || source === 'wildberries') return 'wildberries';
     if (source === 'ozon') return 'ozon';
+    if (source === 'yandex' || source === 'яндекс' || source === 'яндекс маркет') return 'yandex';
     return source;
   }
 
@@ -81,7 +82,7 @@
         const source = normalizeSource(row[indexByHeader.source]);
         const title = String(row[indexByHeader.title] || '').trim();
         if (!date || !source || !title) throw new Error(`пустые обязательные поля в строке ${index + 2}`);
-        if (source !== 'ozon' && source !== 'wildberries') {
+        if (source !== 'ozon' && source !== 'wildberries' && source !== 'yandex') {
           throw new Error(`неизвестный marketplace в строке ${index + 2}`);
         }
 

@@ -12,6 +12,7 @@ const csvColumns = [
 const els = {
   sourceOzon: document.getElementById('sourceOzon'),
   sourceWb: document.getElementById('sourceWb'),
+  sourceYandex: document.getElementById('sourceYandex'),
   collect: document.getElementById('collect'),
   themeToggle: document.getElementById('themeToggle'),
   uploadCsv: document.getElementById('uploadCsv'),
@@ -31,6 +32,7 @@ const els = {
   viewPanels: [...document.querySelectorAll('.view-panel')],
   analyticsOzon: document.getElementById('analyticsOzon'),
   analyticsWb: document.getElementById('analyticsWb'),
+  analyticsYandex: document.getElementById('analyticsYandex'),
   analyticsEmpty: document.querySelector('.analytics-empty'),
   analyticsTotal: document.getElementById('analyticsTotal'),
   analyticsAverage: document.getElementById('analyticsAverage'),
@@ -54,11 +56,14 @@ const defaultCollectOptions = {
   ozonMaxPages: 1000,
   wbMaxPages: 2000,
   wbPageSize: 100,
+  yandexMaxPages: 200,
   ozonParsePdf: true,
   ozonPdfConcurrency: Math.min(12, Math.max(8, cpuCount)),
   wbReceiptConcurrency: Math.min(24, Math.max(12, cpuCount * 2)),
+  yandexReceiptConcurrency: 2,
   ozonApiPauseMs: 0,
-  wbApiPauseMs: 0
+  wbApiPauseMs: 0,
+  yandexApiPauseMs: 300
 };
 
 const logStorageKey = 'markettrat-log-v1';
@@ -66,16 +71,24 @@ const themeStorageKey = 'markettrat-theme-v1';
 const categoryChartTypeStorageKey = 'markettrat-category-chart-v1';
 const sourceLabels = {
   ozon: 'Ozon',
-  wildberries: 'Wildberries'
+  wildberries: 'Wildberries',
+  yandex: 'Яндекс Маркет'
 };
 const sourceColors = {
   ozon: '#005bff',
-  wildberries: '#cb11ab'
+  wildberries: '#cb11ab',
+  yandex: '#f2c200'
 };
 const sourceMarks = {
   ozon: 'O',
-  wildberries: 'WB'
+  wildberries: 'WB',
+  yandex: 'Я'
 };
+const collectSourceInputs = [
+  ['ozon', els.sourceOzon],
+  ['wildberries', els.sourceWb],
+  ['yandex', els.sourceYandex]
+];
 const periodUnitLabels = {
   day: 'среднее за день',
   week: 'среднее за неделю',
@@ -88,8 +101,10 @@ const categoryLabels = {
 const categoryColors = {
   'Авто': '#f97316',
   'Аксессуары': '#64748b',
+  'Благотворительность': '#10b981',
   'Бытовая химия': '#14b8a6',
   'Бытовая техника': '#0ea5e9',
+  'Доставка': '#94a3b8',
   'Дом': '#8b5cf6',
   'Детям': '#ec4899',
   'Здоровье': '#22c55e',
@@ -100,6 +115,8 @@ const categoryColors = {
   'Красота и уход': '#d946ef',
   'Одежда': '#06b6d4',
   'Обувь': '#6366f1',
+  'Пакеты и упаковка': '#78716c',
+  'Подписки': '#7c3aed',
   'Продукты': '#84cc16',
   'Ремонт': '#eab308',
   'Сад': '#16a34a',
@@ -138,6 +155,23 @@ function callChrome(fn, ...args) {
       else resolve(result);
     });
   });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForCollectJob(jobId) {
+  while (true) {
+    await sleep(1000);
+    const response = await callChrome(api.runtime.sendMessage, {
+      type: 'SPEND_COLLECT_STATUS',
+      jobId
+    });
+    if (!response?.ok) throw new Error(response?.error || 'Не удалось получить статус сбора.');
+    if (response.status === 'done') return response;
+    if (response.status === 'error') throw new Error(response.error || 'Не удалось собрать данные.');
+  }
 }
 
 function loadStoredLog() {
@@ -239,7 +273,26 @@ function progressLogKey(text) {
   if (/^Ozon: PDF \d+\/\d+/.test(value)) return 'ozon-pdf';
   if (/^Wildberries: найдено чеков \d+, API-страница/.test(value)) return 'wb-api';
   if (/^Wildberries: чеки \d+\/\d+/.test(value)) return 'wb-html';
+  if (/^Яндекс Маркет: найдено заказов/.test(value)) return 'yandex-orders';
+  if (/^Яндекс Маркет: чеки \d+\/\d+.*ссылок/.test(value)) return 'yandex-links';
+  if (/^Яндекс Маркет: чеки \d+\/\d+/.test(value)) return 'yandex-html';
+  if (/^Яндекс Маркет: 429/.test(value)) return 'yandex-429';
+  if (/^Яндекс Маркет: batch /.test(value)) return 'yandex-batch';
   return '';
+}
+
+function selectedCollectSources() {
+  return collectSourceInputs
+    .filter(([, input]) => input.checked)
+    .map(([source]) => source);
+}
+
+function updateProgressFill() {
+  const colors = selectedCollectSources().map((source) => sourceColors[source]);
+  els.progress.style.setProperty(
+    '--progress-fill',
+    colors.length > 1 ? `linear-gradient(90deg, ${colors.join(', ')})` : (colors[0] || 'var(--primary)')
+  );
 }
 
 function setStatus(text, progressValue = null, progressMax = null) {
@@ -283,9 +336,10 @@ function makeCsv(records) {
 
 function withCategory(row) {
   const category = String(row.category || '').trim();
+  const guessed = globalThis.guessSpendCategory?.(row.title) || 'unknown';
   return {
     ...row,
-    category: category || globalThis.guessSpendCategory?.(row.title) || 'unknown'
+    category: !category || category.toLowerCase() === 'unknown' ? guessed : category
   };
 }
 
@@ -425,9 +479,17 @@ function absorbReturns(records) {
   };
 }
 
+function isServiceRow(row) {
+  const title = String(row.title || '').trim();
+  if (row.source === 'wildberries') return /^(услуга доставки|комиссия сервиса)$/i.test(title);
+  if (row.source === 'yandex') return /^(доставк.*|сервисный сбор|работа сервиса)$/i.test(title);
+  return false;
+}
+
 function logParserStats(stats = {}) {
   const ozon = stats.ozon || {};
   const wb = stats.wildberries || {};
+  const yandex = stats.yandex || {};
   const dropped = (ozon.duplicateRowsDropped || 0)
     + (ozon.prepaymentRowsDropped || 0)
     + (ozon.operationalRowsDropped || 0)
@@ -442,6 +504,25 @@ function logParserStats(stats = {}) {
   }
   if (wb.receipts) {
     appendLog(`Debug Wildberries: чеков ${wb.receipts}.`, 'debug-wb-stats');
+  }
+  if (yandex.receipts || yandex.itemRows) {
+    const parts = [`чеков ${yandex.parsedReceipts || 0} / ${yandex.receipts || 0}`];
+    if (yandex.orders) parts.push(`заказов ${yandex.orders}`);
+    if (yandex.archivedOrders) parts.push(`архивных ${yandex.archivedOrders}`);
+    if (yandex.noReceiptOrders) parts.push(`без чеков ${yandex.noReceiptOrders}`);
+    if (yandex.failedOrders) parts.push(`ошибок заказов ${yandex.failedOrders}`);
+    if (yandex.itemRows) parts.push(`строк ${yandex.itemRows}`);
+    if (yandex.prepaymentRowsDropped) parts.push(`предоплат отброшено ${yandex.prepaymentRowsDropped}`);
+    appendLog(`Debug Яндекс Маркет: ${parts.join(', ')}.`, 'debug-yandex-stats');
+    if (yandex.failedOrderSamples?.length) {
+      appendLog(`Debug Яндекс заказы: ${yandex.failedOrderSamples.join(' | ')}`, 'debug-yandex-order-errors');
+    }
+    if (yandex.failedReceiptSamples?.length) {
+      appendLog(`Debug Яндекс чеки: ${yandex.failedReceiptSamples.join(' | ')}`, 'debug-yandex-receipt-errors');
+    }
+  }
+  if (stats.cleaning?.serviceRowsDropped) {
+    appendLog(`Debug: служебных строк удалено ${stats.cleaning.serviceRowsDropped}.`, 'debug-cleaning-stats');
   }
 }
 
@@ -499,6 +580,7 @@ function selectedAnalyticsSources() {
   const sources = new Set();
   if (els.analyticsOzon.checked) sources.add('ozon');
   if (els.analyticsWb.checked) sources.add('wildberries');
+  if (els.analyticsYandex.checked) sources.add('yandex');
   return sources;
 }
 
@@ -1189,14 +1271,19 @@ function updateAnalytics() {
 }
 
 function updateResult(records, stats = {}) {
-  const cleaned = absorbReturns(records);
-  absorbedRefunds = cleaned.stats.refundsAbsorbed || [];
+  const serviceRowsDropped = records.filter(isServiceRow).length;
+  const cleaned = absorbReturns(records.filter((row) => !isServiceRow(row)));
+  const cleaningStats = {
+    ...cleaned.stats,
+    serviceRowsDropped
+  };
+  absorbedRefunds = cleaningStats.refundsAbsorbed || [];
   rows = cleaned.rows.map(withCategory).sort((a, b) => String(a.date).localeCompare(String(b.date)));
   document.body.classList.toggle('has-data', rows.length > 0);
   csvText = makeCsv(rows);
   els.downloadCsv.disabled = rows.length === 0;
   updateDateInputBounds();
-  logParserStats({ ...stats, cleaning: cleaned.stats });
+  logParserStats({ ...stats, cleaning: cleaningStats });
   updateAnalytics();
 }
 
@@ -1249,9 +1336,7 @@ async function uploadCsv() {
 }
 
 async function collect() {
-  const sources = [];
-  if (els.sourceOzon.checked) sources.push('ozon');
-  if (els.sourceWb.checked) sources.push('wildberries');
+  const sources = selectedCollectSources();
 
   if (sources.length === 0) {
     setStatus('Выберите хотя бы один источник.');
@@ -1277,12 +1362,14 @@ async function collect() {
   appendLog(`Старт: ${sources.join(', ')}.`);
 
   try {
-    const response = await callChrome(api.runtime.sendMessage, {
-      type: 'SPEND_COLLECT',
+    const started = await callChrome(api.runtime.sendMessage, {
+      type: 'SPEND_COLLECT_START',
       sources,
       options: defaultCollectOptions
     });
+    if (!started?.ok || !started.jobId) throw new Error(started?.error || 'Не удалось запустить сбор.');
 
+    const response = await waitForCollectJob(started.jobId);
     if (!response?.ok) throw new Error(response?.error || 'Не удалось собрать данные.');
 
     hasCollected = true;
@@ -1344,6 +1431,10 @@ els.dateTo.addEventListener('change', () => {
 els.resetPeriod.addEventListener('click', () => applyQuickPeriod('all'));
 els.analyticsOzon.addEventListener('change', updateAnalytics);
 els.analyticsWb.addEventListener('change', updateAnalytics);
+els.analyticsYandex.addEventListener('change', updateAnalytics);
+for (const [, input] of collectSourceInputs) {
+  input.addEventListener('change', updateProgressFill);
+}
 els.categoryChartType.addEventListener('change', () => {
   localStorage.setItem(categoryChartTypeStorageKey, els.categoryChartType.value);
   updateAnalytics();
@@ -1356,5 +1447,6 @@ els.clearLog.addEventListener('click', () => {
 
 els.categoryChartType.value = loadCategoryChartType();
 applyTheme(loadTheme());
+updateProgressFill();
 renderLog();
 updateAnalytics();

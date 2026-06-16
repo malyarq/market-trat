@@ -4,7 +4,8 @@ const { parseSpendCsv } = require('./csv.js');
 assert.deepEqual(parseSpendCsv([
   '\uFEFFdate,marketplace,title,amount,currency,category',
   '2026-01-02,ozon,"Tea, green",123.4,RUB,Продукты',
-  '2026-01-03,Wildberries,"Quote ""item""","-10,5",RUB,'
+  '2026-01-03,Wildberries,"Quote ""item""","-10,5",RUB,',
+  '2026-01-04,yandex,Delivery,99,RUB,Доставка'
 ].join('\r\n')), [
   {
     date: '2026-01-02',
@@ -21,6 +22,14 @@ assert.deepEqual(parseSpendCsv([
     amount: '-10.50',
     currency: 'RUB',
     category: ''
+  },
+  {
+    date: '2026-01-04',
+    source: 'yandex',
+    title: 'Delivery',
+    amount: '99.00',
+    currency: 'RUB',
+    category: 'Доставка'
   }
 ]);
 
