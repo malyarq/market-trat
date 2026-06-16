@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MarketTrat</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <main>
+    <header class="topbar">
+      <div>
+        <h1>MarketTrat</h1>
+        <p>Расходы из чеков Ozon и Wildberries в один CSV.</p>
+      </div>
+      <div class="top-actions">
+        <button id="themeToggle" type="button" class="secondary">Тёмная тема</button>
+        <button id="collect" type="button">Собрать данные</button>
+      </div>
+    </header>
+
+    <section class="sources" aria-label="Источники">
+      <label class="check">
+        <input id="sourceOzon" type="checkbox" checked>
+        <span><span class="source-badge ozon">O</span>Ozon</span>
+      </label>
+      <label class="check">
+        <input id="sourceWb" type="checkbox" checked>
+        <span><span class="source-badge wildberries">WB</span>Wildberries</span>
+      </label>
+    </section>
+
+    <section class="status">
+      <div id="statusText">Готово к запуску.</div>
+      <progress id="progress" value="0" max="1"></progress>
+    </section>
+
+    <section id="warningBanner" class="warning-banner" hidden></section>
+
+    <section class="toolbar">
+      <button id="uploadCsv" type="button" class="secondary">Загрузить CSV</button>
+      <input id="uploadCsvInput" type="file" accept=".csv,text/csv" hidden>
+      <button id="downloadCsv" type="button" disabled>Скачать CSV</button>
+    </section>
+
+    <nav class="view-tabs" aria-label="Разделы">
+      <button class="tab-button active" type="button" data-view="analytics">Аналитика</button>
+      <button class="tab-button" type="button" data-view="log">Технический лог <span id="logBadge" class="tab-badge" hidden>0</span></button>
+    </nav>
+
+    <section id="analyticsView" class="analytics view-panel active" aria-label="Аналитика">
+      <div class="analytics-titlebar">
+        <h2>Аналитика</h2>
+        <div class="analytics-controls">
+          <label class="field">
+            <span>Группировать</span>
+            <span class="select-control">
+              <select id="periodGroup">
+                <option value="month" selected>Месяц</option>
+                <option value="week">Неделя</option>
+                <option value="day">День</option>
+                <option value="year">Год</option>
+              </select>
+            </span>
+          </label>
+          <label class="field">
+            <span>Считать с</span>
+            <input id="dateFrom" type="date">
+          </label>
+          <label class="field">
+            <span>по</span>
+            <input id="dateTo" type="date">
+          </label>
+          <button type="button" class="secondary quick-period" data-period="this-month">Этот месяц</button>
+          <button type="button" class="secondary quick-period" data-period="prev-month">Прошлый месяц</button>
+          <button type="button" class="secondary quick-period" data-period="this-year">Этот год</button>
+          <button id="resetPeriod" type="button" class="secondary">Весь период</button>
+          <label class="check">
+            <input id="analyticsOzon" type="checkbox" checked>
+            <span><span class="source-badge ozon">O</span>Ozon</span>
+          </label>
+          <label class="check">
+            <input id="analyticsWb" type="checkbox" checked>
+            <span><span class="source-badge wildberries">WB</span>Wildberries</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="analytics-empty">Выберите источники и нажмите «Собрать данные».</div>
+
+      <div class="analytics-kpis">
+        <div><strong id="analyticsTotal">0</strong><span>потрачено</span></div>
+        <div><strong id="analyticsAverage">0</strong><span id="analyticsAverageLabel">среднее за месяц</span></div>
+        <div><strong id="analyticsPurchases">0</strong><span id="analyticsPurchasesLabel">покупок</span></div>
+        <div><strong id="analyticsRefunds">0</strong><span>возвратов учтено</span></div>
+      </div>
+
+      <div class="analytics-layout">
+        <div class="analytics-main">
+          <div class="chart-panel">
+            <div class="panel-head">
+              <h3>Динамика расходов</h3>
+              <span id="chartRange"></span>
+            </div>
+            <svg id="periodChart" viewBox="0 0 960 300" role="img" aria-label="График расходов по периодам"></svg>
+          </div>
+          <div class="chart-panel">
+            <div class="panel-head">
+              <h3>Категории</h3>
+              <div class="panel-head-actions">
+                <span id="categorySummary"></span>
+                <span class="select-control compact-select">
+                  <select id="categoryChartType" aria-label="Вид категорий">
+                    <option value="bars" selected>Полосы</option>
+                    <option value="donut">Кольцо</option>
+                    <option value="tiles">Плитки</option>
+                  </select>
+                </span>
+              </div>
+            </div>
+            <div id="categoryBreakdown" class="category-breakdown"></div>
+          </div>
+        </div>
+        <div class="analytics-side">
+          <div class="chart-panel">
+            <h3>Источники</h3>
+            <div id="sourceBreakdown" class="breakdown"></div>
+          </div>
+          <div class="chart-panel">
+            <h3>Топ трат</h3>
+            <ol id="topItems" class="top-items"></ol>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="logView" class="panel view-panel technical-log" aria-label="Технический лог">
+      <div class="panel-head">
+        <h2>Технический лог</h2>
+        <div class="panel-head-actions">
+          <button id="copyLog" type="button" class="secondary">Копировать лог</button>
+          <button id="clearLog" type="button" class="secondary">Очистить лог</button>
+        </div>
+      </div>
+      <pre id="log"></pre>
+    </section>
+  </main>
+  <script src="categories.js"></script>
+  <script src="csv.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
