@@ -4,6 +4,12 @@
 
 Данные никуда не отправляются: всё работает внутри браузера.
 
+## Скриншоты
+
+![Сбор данных и сводка](assets/screenshots/overview.png)
+
+![Аналитика расходов](assets/screenshots/analytics.png)
+
 ## Что умеет
 
 - собирает чеки Ozon и Wildberries;
