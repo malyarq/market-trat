@@ -50,7 +50,6 @@ date,marketplace,title,amount,currency,category
 ```bash
 node extension/csv.test.js
 node extension/categories.test.js
-node test_processing_speed.mjs
 ```
 
 ## Лицензия
