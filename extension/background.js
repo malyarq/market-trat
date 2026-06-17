@@ -29,6 +29,27 @@ function emitProgress(message, value = null, max = null) {
   }
 }
 
+const progressSourceLabels = {
+  ozon: 'Ozon',
+  wildberries: 'Wildberries',
+  yandex: 'Яндекс Маркет'
+};
+
+async function trackSourceProgress(source, work) {
+  try {
+    const result = await work();
+    emitProgress(`${progressSourceLabels[source]}: готово, строк ${(result.rows || []).length}.`);
+    return {
+      source,
+      rows: result.rows || [],
+      stats: result.stats || {}
+    };
+  } catch (error) {
+    emitProgress(`${progressSourceLabels[source]}: ошибка: ${error.message}`);
+    throw error;
+  }
+}
+
 function chromeCall(fn, ...args) {
   return new Promise((resolve, reject) => {
     fn(...args, (result) => {
@@ -793,7 +814,7 @@ async function collectSpend({ sources, options }) {
   const jobs = [];
 
   if (sources.includes('ozon')) {
-    jobs.push((async () => {
+    jobs.push(trackSourceProgress('ozon', async () => {
       emitProgress('Ozon: открываю вкладку и собираю чеки...', 0, sources.length);
       const result = await collectFromTab('ozon', {
         maxPages: options.ozonMaxPages,
@@ -802,15 +823,14 @@ async function collectSpend({ sources, options }) {
         apiPauseMs: options.ozonApiPauseMs
       });
       return {
-        source: 'ozon',
         rows: result.rows || [],
         stats: result.stats || {}
       };
-    })());
+    }));
   }
 
   if (sources.includes('wildberries')) {
-    jobs.push((async () => {
+    jobs.push(trackSourceProgress('wildberries', async () => {
       emitProgress('Wildberries: открываю вкладку и собираю чеки...', 0, sources.length);
       const result = await collectFromTab('wildberries', {
         maxPages: options.wbMaxPages,
@@ -818,15 +838,14 @@ async function collectSpend({ sources, options }) {
         apiPauseMs: options.wbApiPauseMs
       });
       return {
-        source: 'wildberries',
         rows: await rowsFromWbReceipts(result.receipts || [], options.wbReceiptConcurrency),
         stats: result.stats || {}
       };
-    })());
+    }));
   }
 
   if (sources.includes('yandex')) {
-    jobs.push((async () => {
+    jobs.push(trackSourceProgress('yandex', async () => {
       emitProgress('Яндекс Маркет: открываю вкладку и собираю чеки...', 0, sources.length);
       const { response: metadata, managedTab } = await collectFromTabKeepOpen('yandex', {
         maxPages: options.yandexMaxPages,
@@ -842,7 +861,6 @@ async function collectSpend({ sources, options }) {
         });
         const parsed = await rowsFromYandexReceipts(result.receipts || [], 4);
         return {
-          source: 'yandex',
           rows: parsed.rows,
           stats: {
             ...(metadata.stats || {}),
@@ -853,7 +871,7 @@ async function collectSpend({ sources, options }) {
       } finally {
         await closeManagedTab(managedTab, 'yandex');
       }
-    })());
+    }));
   }
 
   const results = await Promise.all(jobs.map((job) => job

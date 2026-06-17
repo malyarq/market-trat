@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { guessSpendCategory } = require('./categories.js');
+const { guessSpendCategory, setSpendCategoryRules } = require('./categories.js');
 
 for (const [title, category] of [
   ['Смартфон Apple iPhone 15 128GB', 'Электроника'],
@@ -29,8 +29,32 @@ for (const [title, category] of [
   ['Симулякры и симуляции | Бодрийар Жан', 'Книги'],
   ['Капсулы для стирки Персил Power Caps Color 4в1', 'Бытовая химия'],
   ['Кисточки для детейлинга AutoForce, набор 3шт.', 'Авто'],
+  ['Процессор AMD Ryzen 5 7500F AM5, OEM', 'Электроника'],
+  ['Блок питания 1STPLAYER NGDP, 750W, ATX3.1', 'Электроника'],
+  ['Фен для волос с BLDC-мотором и диффузором', 'Бытовая техника'],
+  ['Ключ активации для подключения к приватной сети, на 6 месяцев', 'Подписки'],
+  ['Благотворительный сертификат фонда "Онкологика"', 'Благотворительность'],
+  ['POD система Vaporesso XROS 3 MINI', 'Продукты'],
+  ['BIODERMA Sensibio Очищающий гель для умывания', 'Красота и уход'],
+  ['Конструктор Mercedes-AMG F1 W14 E Performance, набор деталей', 'Игрушки'],
+  ['Многофункциональная овощерезка Oursson 8 в 1', 'Дом'],
+  ['Мультитул тактический', 'Ремонт'],
+  ['Мариам Петросян. Дом, в котором...', 'Книги'],
+  ['Носки-тапочки женские MINAKU "Зайка"', 'Обувь'],
+  ['Шкант 10х45 мм мебельный деревянный отборный', 'Ремонт'],
+  ['Ключ для сервиса защищенной и ускоренной сети, 1 месяц', 'Подписки'],
+  ['Подарок мужчине на день рождения / Подарок на новый год', 'unknown'],
   ['Ozon PDF не разобран: чек', 'unknown'],
   ['Подарочный набор', 'unknown']
 ]) {
   assert.equal(guessSpendCategory(title), category, title);
 }
+
+assert.equal(guessSpendCategory('Очень редкий qwertycustom товар'), 'unknown');
+assert.equal(setSpendCategoryRules({
+  rules: [{ category: 'Хобби и творчество', weight: 9, tokens: ['qwertycustom'] }]
+}), 1);
+assert.equal(guessSpendCategory('Очень редкий qwertycustom товар'), 'Хобби и творчество');
+setSpendCategoryRules({ rules: [{ category: 'Подписки', weight: 9, tokens: ['steam'] }] });
+assert.equal(guessSpendCategory('Iron Sky электронный ключ PC Steam'), 'Подписки');
+setSpendCategoryRules({ rules: [] });

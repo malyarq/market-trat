@@ -19,33 +19,48 @@
       </div>
     </header>
 
-    <section class="sources" aria-label="Источники">
-      <label class="check">
-        <input id="sourceOzon" type="checkbox" checked>
-        <span><span class="source-badge ozon">O</span>Ozon</span>
-      </label>
-      <label class="check">
-        <input id="sourceWb" type="checkbox" checked>
-        <span><span class="source-badge wildberries">WB</span>Wildberries</span>
-      </label>
-      <label class="check">
-        <input id="sourceYandex" type="checkbox" checked>
-        <span><span class="source-badge yandex">Я</span>Яндекс Маркет</span>
-      </label>
+    <section id="runSummary" class="run-summary" hidden>
+      <span id="runSummaryText"></span>
+      <div class="run-summary-actions">
+        <button id="runDownloadCsv" type="button" disabled>Скачать весь CSV</button>
+        <button id="toggleRunDetails" type="button" class="secondary">Подробнее</button>
+      </div>
     </section>
 
-    <section class="status">
-      <div id="statusText">Готово к запуску.</div>
-      <progress id="progress" value="0" max="1"></progress>
-    </section>
+    <div id="runDetails" class="run-details">
+      <section class="sources" aria-label="Источники сбора">
+        <span class="control-label">Собирать из</span>
+        <label class="check">
+          <input id="sourceOzon" type="checkbox" checked>
+          <span><span class="source-badge ozon">O</span>Ozon</span>
+        </label>
+        <label class="check">
+          <input id="sourceWb" type="checkbox" checked>
+          <span><span class="source-badge wildberries">WB</span>Wildberries</span>
+        </label>
+        <label class="check">
+          <input id="sourceYandex" type="checkbox" checked>
+          <span><span class="source-badge yandex">Я</span>Яндекс Маркет</span>
+        </label>
+      </section>
 
-    <section id="warningBanner" class="warning-banner" hidden></section>
+      <section class="status">
+        <div id="statusText">Готово к запуску.</div>
+        <progress id="progress" value="0" max="1"></progress>
+        <div id="sourceStatuses" class="source-statuses" hidden></div>
+      </section>
 
-    <section class="toolbar">
-      <button id="uploadCsv" type="button" class="secondary">Загрузить CSV</button>
-      <input id="uploadCsvInput" type="file" accept=".csv,text/csv" hidden>
-      <button id="downloadCsv" type="button" disabled>Скачать CSV</button>
-    </section>
+      <section id="warningBanner" class="warning-banner" hidden></section>
+      <section id="qualitySummary" class="quality-summary" hidden></section>
+
+      <section class="toolbar">
+        <button id="uploadCsv" type="button" class="secondary">Загрузить CSV</button>
+        <input id="uploadCsvInput" type="file" accept=".csv,text/csv" hidden>
+        <button id="downloadCsv" type="button" disabled>Скачать весь CSV</button>
+      </section>
+    </div>
+
+    <section id="updateBanner" class="update-banner" hidden></section>
 
     <nav class="view-tabs" aria-label="Разделы">
       <button class="tab-button active" type="button" data-view="analytics">Аналитика</button>
@@ -79,6 +94,19 @@
           <button type="button" class="secondary quick-period" data-period="prev-month">Прошлый месяц</button>
           <button type="button" class="secondary quick-period" data-period="this-year">Этот год</button>
           <button id="resetPeriod" type="button" class="secondary">Весь период</button>
+          <label class="field quick-period-field">
+            <span>Период</span>
+            <span class="select-control">
+              <select id="quickPeriodSelect">
+                <option value="all">Весь период</option>
+                <option value="this-month">Этот месяц</option>
+                <option value="prev-month">Прошлый месяц</option>
+                <option value="this-year">Этот год</option>
+                <option value="custom">Свой период</option>
+              </select>
+            </span>
+          </label>
+          <span class="control-label">Фильтр отчёта</span>
           <label class="check">
             <input id="analyticsOzon" type="checkbox" checked>
             <span><span class="source-badge ozon">O</span>Ozon</span>
@@ -93,14 +121,15 @@
           </label>
         </div>
       </div>
+      <div id="activeFilters" class="active-filters"></div>
 
       <div class="analytics-empty">Выберите источники и нажмите «Собрать данные».</div>
 
       <div class="analytics-kpis">
-        <div><strong id="analyticsTotal">0</strong><span>потрачено</span></div>
+        <div><strong id="analyticsTotal">0</strong><span>потрачено</span><small id="analyticsTotalCompare"></small></div>
         <div><strong id="analyticsAverage">0</strong><span id="analyticsAverageLabel">среднее за месяц</span></div>
         <div><strong id="analyticsPurchases">0</strong><span id="analyticsPurchasesLabel">покупок</span></div>
-        <div><strong id="analyticsRefunds">0</strong><span>возвратов учтено</span></div>
+        <div><strong id="analyticsRefunds">0</strong><span>возвратами уменьшено</span></div>
       </div>
 
       <div class="analytics-layout">
@@ -128,6 +157,27 @@
             </div>
             <div id="categoryBreakdown" class="category-breakdown"></div>
           </div>
+          <div class="chart-panel">
+            <div class="panel-head">
+              <h3 id="detailTitle">Детали покупок</h3>
+              <div class="panel-head-actions">
+                <input id="detailSearch" class="detail-search" type="search" placeholder="Поиск по товару" aria-label="Поиск по товару">
+                <label class="detail-page-size">
+                  <span>Показывать</span>
+                  <select id="detailPageSize" aria-label="Сколько покупок показывать">
+                    <option value="60" selected>60</option>
+                    <option value="100">100</option>
+                    <option value="200">200</option>
+                    <option value="all">Все</option>
+                  </select>
+                </label>
+                <span id="detailSummary"></span>
+                <button id="clearDetailFilter" type="button" class="secondary category-toggle" hidden>Сбросить</button>
+              </div>
+            </div>
+            <div id="detailRows" class="detail-rows"></div>
+            <button id="detailMore" type="button" class="secondary detail-more" hidden>Показать ещё</button>
+          </div>
         </div>
         <div class="analytics-side">
           <div class="chart-panel">
@@ -150,11 +200,12 @@
           <button id="clearLog" type="button" class="secondary">Очистить лог</button>
         </div>
       </div>
-      <pre id="log"></pre>
+      <pre id="log" tabindex="0"></pre>
     </section>
   </main>
   <script src="categories.js"></script>
   <script src="csv.js"></script>
+  <script src="update.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

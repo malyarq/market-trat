@@ -15,26 +15,37 @@ const els = {
   sourceYandex: document.getElementById('sourceYandex'),
   collect: document.getElementById('collect'),
   themeToggle: document.getElementById('themeToggle'),
+  runSummary: document.getElementById('runSummary'),
+  runSummaryText: document.getElementById('runSummaryText'),
+  runDownloadCsv: document.getElementById('runDownloadCsv'),
+  toggleRunDetails: document.getElementById('toggleRunDetails'),
+  runDetails: document.getElementById('runDetails'),
   uploadCsv: document.getElementById('uploadCsv'),
   uploadCsvInput: document.getElementById('uploadCsvInput'),
   downloadCsv: document.getElementById('downloadCsv'),
   copyLog: document.getElementById('copyLog'),
   clearLog: document.getElementById('clearLog'),
   warningBanner: document.getElementById('warningBanner'),
+  updateBanner: document.getElementById('updateBanner'),
+  qualitySummary: document.getElementById('qualitySummary'),
   statusText: document.getElementById('statusText'),
   progress: document.getElementById('progress'),
+  sourceStatuses: document.getElementById('sourceStatuses'),
   periodGroup: document.getElementById('periodGroup'),
   dateFrom: document.getElementById('dateFrom'),
   dateTo: document.getElementById('dateTo'),
   resetPeriod: document.getElementById('resetPeriod'),
+  quickPeriodSelect: document.getElementById('quickPeriodSelect'),
   quickPeriodButtons: [...document.querySelectorAll('.quick-period')],
   tabButtons: [...document.querySelectorAll('.tab-button')],
   viewPanels: [...document.querySelectorAll('.view-panel')],
   analyticsOzon: document.getElementById('analyticsOzon'),
   analyticsWb: document.getElementById('analyticsWb'),
   analyticsYandex: document.getElementById('analyticsYandex'),
+  activeFilters: document.getElementById('activeFilters'),
   analyticsEmpty: document.querySelector('.analytics-empty'),
   analyticsTotal: document.getElementById('analyticsTotal'),
+  analyticsTotalCompare: document.getElementById('analyticsTotalCompare'),
   analyticsAverage: document.getElementById('analyticsAverage'),
   analyticsAverageLabel: document.getElementById('analyticsAverageLabel'),
   analyticsPurchases: document.getElementById('analyticsPurchases'),
@@ -46,6 +57,13 @@ const els = {
   categoryBreakdown: document.getElementById('categoryBreakdown'),
   categorySummary: document.getElementById('categorySummary'),
   categoryChartType: document.getElementById('categoryChartType'),
+  detailTitle: document.getElementById('detailTitle'),
+  detailSummary: document.getElementById('detailSummary'),
+  detailSearch: document.getElementById('detailSearch'),
+  detailPageSize: document.getElementById('detailPageSize'),
+  detailMore: document.getElementById('detailMore'),
+  clearDetailFilter: document.getElementById('clearDetailFilter'),
+  detailRows: document.getElementById('detailRows'),
   topItems: document.getElementById('topItems'),
   logBadge: document.getElementById('logBadge'),
   log: document.getElementById('log')
@@ -139,6 +157,13 @@ let logLines = loadStoredLog();
 let hasCollected = false;
 let selectedPeriodKey = '';
 let categoriesExpanded = false;
+let detailFilter = null;
+let collectStatuses = {};
+let runDetailsOpen = true;
+let lastRunAt = null;
+let lastRunKind = '';
+let lastWarningCount = 0;
+let detailShownCount = 60;
 const logLineByKey = new Map();
 let logRenderScheduled = false;
 
@@ -240,6 +265,94 @@ function createSourceBadge(source) {
   return badge;
 }
 
+function makeClickable(node, activate) {
+  node.classList.add('clickable');
+  node.tabIndex = 0;
+  node.setAttribute('role', 'button');
+  node.addEventListener('click', activate);
+  node.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      activate();
+    }
+  });
+}
+
+function sourceFromProgress(text) {
+  const value = String(text || '');
+  if (value.startsWith('Ozon:')) return 'ozon';
+  if (value.startsWith('Wildberries:')) return 'wildberries';
+  if (value.startsWith('Яндекс Маркет:')) return 'yandex';
+  return '';
+}
+
+function collectStatusFromProgress(text) {
+  const value = String(text || '');
+  if (/^[^:]+: готово(?:[,. ]|$)/.test(value)) return { state: 'done', label: 'готово' };
+  if (/^[^:]+: ошибка(?:[,. ]|$)/.test(value)) return { state: 'error', label: 'ошибка' };
+  return { state: 'running', label: 'собирается' };
+}
+
+function renderSourceStatuses() {
+  clearNode(els.sourceStatuses);
+  const entries = Object.entries(collectStatuses);
+  els.sourceStatuses.hidden = entries.length === 0;
+
+  for (const [source, status] of entries) {
+    const item = document.createElement('span');
+    item.className = `source-status ${status.state || 'waiting'}`;
+    if (status.title) item.title = status.title;
+    item.append(createSourceBadge(source), document.createTextNode(status.label || 'ожидает'));
+    els.sourceStatuses.appendChild(item);
+  }
+}
+
+function setCollectStatuses(sources, state, label) {
+  collectStatuses = Object.fromEntries(sources.map((source) => [source, { state, label }]));
+  renderSourceStatuses();
+}
+
+function setCollectStatus(source, state, label, title = '') {
+  if (!source || !collectStatuses[source]) return;
+  collectStatuses[source] = { state, label, title };
+  renderSourceStatuses();
+}
+
+function updateCsvButton() {
+  const text = 'Скачать весь CSV';
+  els.downloadCsv.disabled = rows.length === 0;
+  els.downloadCsv.textContent = text;
+  els.runDownloadCsv.disabled = rows.length === 0;
+  els.runDownloadCsv.textContent = text;
+}
+
+function formatRunTime(date) {
+  return date
+    ? date.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : '';
+}
+
+function renderRunSummary() {
+  const show = rows.length > 0 && lastRunAt;
+  els.runSummary.hidden = !show;
+  els.runDetails.classList.toggle('collapsed', show && !runDetailsOpen);
+  els.runDownloadCsv.hidden = show && runDetailsOpen;
+  els.toggleRunDetails.textContent = runDetailsOpen ? 'Скрыть детали' : 'Подробнее';
+  if (!show) return;
+
+  const total = rows.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+  const warnings = lastWarningCount ? ` · предупреждения: ${lastWarningCount}` : '';
+  els.runSummaryText.textContent = `${lastRunKind}: ${rows.length} строк · ${formatRub(total)}${warnings} · ${formatRunTime(lastRunAt)}`;
+}
+
+function finishRun(kind, warningCount = 0) {
+  lastRunAt = new Date();
+  lastRunKind = kind;
+  lastWarningCount = warningCount;
+  runDetailsOpen = false;
+  renderRunSummary();
+}
+
 function appendLog(text, key = '') {
   const stamp = new Date().toLocaleTimeString('ru-RU', { hour12: false });
   const line = `[${stamp}] ${text}`;
@@ -315,9 +428,117 @@ function setStatus(text, progressValue = null, progressMax = null) {
 function showWarnings(warnings = []) {
   const visibleWarnings = warnings.filter(Boolean).map(String);
   els.warningBanner.hidden = visibleWarnings.length === 0;
+  els.warningBanner.title = visibleWarnings.length ? 'Открыть технический лог' : '';
   els.warningBanner.textContent = visibleWarnings.length
-    ? `Часть данных не собрана: ${visibleWarnings.join('; ')}`
+    ? `Часть данных не собрана: ${visibleWarnings.join('; ')}. Нажмите, чтобы открыть лог.`
     : '';
+}
+
+function showUpdateBanner(version) {
+  clearNode(els.updateBanner);
+  const text = document.createElement('span');
+  text.textContent = `Доступна версия ${version}.`;
+  const link = document.createElement('a');
+  link.href = globalThis.MarketTratUpdate.latestReleaseUrl;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = 'Скачать обновление';
+  els.updateBanner.append(text, link);
+  els.updateBanner.hidden = false;
+}
+
+async function checkForUpdate() {
+  const update = globalThis.MarketTratUpdate;
+  const current = api?.runtime?.getManifest?.().version || '';
+  if (!update || !current) return;
+
+  try {
+    const response = await fetch(update.releaseApiUrl, {
+      cache: 'no-store',
+      headers: { accept: 'application/vnd.github+json' }
+    });
+    if (!response.ok) return;
+
+    const release = await response.json();
+    const latest = update.normalizeVersion(release.tag_name || release.name);
+    if (latest && update.isNewerVersion(latest, current)) showUpdateBanner(latest);
+  } catch {
+    // Update checks are best effort; the extension works offline.
+  }
+}
+
+async function loadCategoryRulePack() {
+  const update = globalThis.MarketTratUpdate;
+  const setRules = globalThis.setSpendCategoryRules;
+  if (typeof setRules !== 'function') return;
+
+  let payload = null;
+  try {
+    const response = await fetch(update.categoryPackApiUrl, {
+      cache: 'no-store',
+      headers: { accept: 'application/vnd.github+json' }
+    });
+    if (response.ok) payload = update.parseGithubContentJson(await response.json());
+  } catch {
+    // Remote category packs are best effort; local rules still work.
+  }
+
+  if (!payload) {
+    try {
+      const localUrl = api?.runtime?.getURL?.('category-rules.json');
+      if (localUrl) {
+        const response = await fetch(localUrl, { cache: 'no-store' });
+        if (response.ok) payload = await response.json();
+      }
+    } catch {
+      // Missing local pack is fine.
+    }
+  }
+
+  const count = payload ? setRules(payload) : 0;
+  if (!count || !rows.length) return;
+
+  rows = rows.map(withCategory);
+  csvText = makeCsv(rows);
+  updateCsvButton();
+  updateAnalytics();
+  renderRunSummary();
+}
+
+function unreadReceiptCount(stats = {}) {
+  return ['ozon', 'yandex'].reduce((sum, source) => {
+    const item = stats[source] || {};
+    const receipts = Number(item.receipts) || 0;
+    const parsed = Number(item.parsedReceipts) || 0;
+    return sum + Math.max(0, receipts - parsed);
+  }, 0);
+}
+
+function renderQualitySummary(rawRecords = [], stats = {}, cleaningStats = {}, warnings = []) {
+  clearNode(els.qualitySummary);
+  const hasAnything = rawRecords.length || rows.length || warnings.length;
+  els.qualitySummary.hidden = !hasAnything;
+  if (!hasAnything) return;
+
+  const parts = [
+    `CSV: ${formatCount(rows.length, ['строка', 'строки', 'строк'])}`,
+    `исходно: ${formatCount(rawRecords.length, ['строка', 'строки', 'строк'])}`
+  ];
+  if (cleaningStats.refundRowsAbsorbed) {
+    parts.push(`возвраты: ${formatRub(cleaningStats.refundAmountAbsorbed)}`);
+  }
+  if (cleaningStats.serviceRowsDropped) {
+    parts.push(`служебные строки: ${cleaningStats.serviceRowsDropped}`);
+  }
+  const unread = unreadReceiptCount(stats);
+  if (unread) parts.push(`не прочитано чеков: ${unread}`);
+  if (warnings.length) parts.push(`предупреждения: ${warnings.length}`);
+
+  for (const part of parts) {
+    const item = document.createElement('span');
+    item.textContent = part;
+    els.qualitySummary.appendChild(item);
+  }
 }
 
 function csvCell(value) {
@@ -445,13 +666,7 @@ function absorbReturns(records) {
       }
     }
 
-    if (absorbedForRefund) {
-      stats.refundsAbsorbed.push({
-        source: refund.row.source,
-        date: refund.row.date,
-        amount: absorbedForRefund
-      });
-    }
+    if (absorbedForRefund) stats.refundsAbsorbed.push({ ...refund.row, amount: absorbedForRefund });
     if (refund.remaining) stats.refundRowsUnmatched += 1;
     else stats.refundRowsAbsorbed += 1;
   }
@@ -584,6 +799,75 @@ function selectedAnalyticsSources() {
   return sources;
 }
 
+function selectedAnalyticsSourceNames(sources = selectedAnalyticsSources()) {
+  return [...sources].map((source) => sourceLabels[source] || source);
+}
+
+function resetAnalyticsFilters() {
+  els.periodGroup.value = 'month';
+  els.dateFrom.value = '';
+  els.dateTo.value = '';
+  els.quickPeriodSelect.value = 'all';
+  els.detailSearch.value = '';
+  els.analyticsOzon.checked = true;
+  els.analyticsWb.checked = true;
+  els.analyticsYandex.checked = true;
+  selectedPeriodKey = '';
+  detailFilter = null;
+  resetDetailPaging();
+  syncDateInputs();
+  updateAnalytics();
+}
+
+function detailFilterName() {
+  if (!detailFilter) return '';
+  if (detailFilter.type === 'period') return `детали: ${detailFilter.key}`;
+  if (detailFilter.type === 'source') return `детали: ${sourceLabels[detailFilter.source] || detailFilter.source}`;
+  if (detailFilter.type === 'refunds') return 'детали: возвраты';
+  if (detailFilter.type === 'category' || detailFilter.type === 'categories') {
+    return `детали: ${detailFilter.label || categoryName(detailFilter.category)}`;
+  }
+  if (detailFilter.type === 'item') return `детали: ${detailFilter.label || detailFilter.title}`;
+  return '';
+}
+
+function renderActiveFilters(sources) {
+  clearNode(els.activeFilters);
+  const period = els.dateFrom.value || els.dateTo.value
+    ? `${els.dateFrom.value || 'начало'} - ${els.dateTo.value || 'сегодня'}`
+    : 'весь период';
+  const sourceNames = selectedAnalyticsSourceNames(sources);
+  const parts = [
+    `Период: ${period}`,
+    `Источники: ${sourceNames.length ? sourceNames.join(', ') : 'нет'}`,
+    `Группировка: ${els.periodGroup.options[els.periodGroup.selectedIndex]?.textContent || els.periodGroup.value}`
+  ];
+  const detail = detailFilterName();
+  if (detail) parts.push(detail);
+  const search = els.detailSearch.value.trim();
+  if (search) parts.push(`поиск: ${search}`);
+
+  for (const part of parts) {
+    const item = document.createElement('span');
+    item.textContent = part;
+    els.activeFilters.appendChild(item);
+  }
+
+  const hasFilters = period !== 'весь период'
+    || sourceNames.length !== 3
+    || els.periodGroup.value !== 'month'
+    || detailFilter
+    || search;
+  if (hasFilters) {
+    const reset = document.createElement('button');
+    reset.type = 'button';
+    reset.className = 'secondary';
+    reset.textContent = 'Сбросить';
+    reset.addEventListener('click', resetAnalyticsFilters);
+    els.activeFilters.appendChild(reset);
+  }
+}
+
 function dateInputValue(value) {
   const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return null;
@@ -618,6 +902,9 @@ function applyQuickPeriod(period) {
   const year = today.getFullYear();
   const month = today.getMonth();
   selectedPeriodKey = '';
+  detailFilter = null;
+  resetDetailPaging();
+  if (els.quickPeriodSelect.value !== period) els.quickPeriodSelect.value = period || 'all';
 
   if (period === 'this-month') {
     setDateRange(localInputDate(new Date(year, month, 1)), localInputDate(new Date(year, month + 1, 0)));
@@ -707,12 +994,43 @@ function updateDateInputBounds() {
 }
 
 function selectedRefundTotal(sources, range) {
-  return absorbedRefunds.reduce((sum, refund) => {
-    if (!sources.has(refund.source)) return sum;
+  return selectedRefundRows(sources, range).reduce((sum, refund) => sum + (Number(refund.amount) || 0), 0);
+}
+
+function selectedRefundRows(sources, range) {
+  return absorbedRefunds.filter((refund) => {
+    if (!sources.has(refund.source)) return false;
     const date = parseRowDate(refund.date);
+    return date && isDateInRange(date, range);
+  });
+}
+
+function totalForRange(sources, range) {
+  return rows.reduce((sum, row) => {
+    if (!sources.has(row.source)) return sum;
+    const date = parseRowDate(row.date);
     if (!date || !isDateInRange(date, range)) return sum;
-    return sum + (Number(refund.amount) || 0);
+    return sum + (Number(row.amount) || 0);
   }, 0);
+}
+
+function previousRange(range) {
+  if (range.from === null || range.to === null) return null;
+  const dayMs = 86400000;
+  const days = Math.max(1, Math.round((range.to - range.from) / dayMs) + 1);
+  const to = range.from - dayMs;
+  return {
+    from: to - ((days - 1) * dayMs),
+    to
+  };
+}
+
+function compareText(current, previous) {
+  if (!previous && !current) return '';
+  if (!previous) return current ? 'новые траты' : '';
+  const percent = Math.round(((current - previous) / Math.abs(previous)) * 100);
+  if (!percent) return 'как в прошлом периоде';
+  return `${percent > 0 ? '+' : ''}${percent}% к прошлому периоду`;
 }
 
 function buildAnalyticsData(sources, group) {
@@ -841,7 +1159,11 @@ function renderPeriodChart(periods) {
       tabindex: 0,
       'aria-label': `${item.key}: ${formatRub(item.total)}`
     };
-    const activate = () => selectChartPeriod(item.key);
+    const activate = () => {
+      detailFilter = { type: 'period', key: item.key };
+      selectChartPeriod(item.key);
+      scrollDetailsIntoView();
+    };
     const onKeydown = (event) => {
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
@@ -951,6 +1273,7 @@ function renderSourceBreakdown(records) {
     bar.appendChild(fill);
 
     row.append(label, bar);
+    makeClickable(row, () => setDetailFilter({ type: 'source', source }, true));
     els.sourceBreakdown.appendChild(row);
   }
 }
@@ -983,6 +1306,25 @@ function buildCategoryBreakdown(records) {
 function categoryMetaText(item, total) {
   const percent = total ? Math.round((item.amount / total) * 100) : 0;
   return `${formatRub(item.amount)} · ${percent}% · ${formatCount(item.count, ['покупка', 'покупки', 'покупок'])}`;
+}
+
+function scrollDetailsIntoView() {
+  requestAnimationFrame(() => {
+    els.detailTitle.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+}
+
+function setDetailFilter(filter, scroll = false) {
+  detailFilter = filter;
+  resetDetailPaging();
+  updateAnalytics();
+  if (scroll) scrollDetailsIntoView();
+}
+
+function categoryDrillFilter(item) {
+  return item.categories?.length
+    ? { type: 'categories', categories: item.categories, label: item.label }
+    : { type: 'category', category: item.category, label: item.label || categoryName(item.category) };
 }
 
 function createCategoryRow(item, total, max, showBar) {
@@ -1018,6 +1360,7 @@ function createCategoryRow(item, total, max, showBar) {
     row.appendChild(bar);
   }
 
+  makeClickable(row, () => setDetailFilter(categoryDrillFilter(item), true));
   return row;
 }
 
@@ -1031,6 +1374,8 @@ function renderCategoryBars(entries, total) {
     segment.style.width = `${Math.max(2, percent)}%`;
     segment.style.background = categoryColor(item.category);
     segment.title = `${item.label || categoryName(item.category)}: ${Math.round(percent)}%`;
+    segment.setAttribute('aria-label', `Показать покупки: ${item.label || categoryName(item.category)}`);
+    makeClickable(segment, () => setDetailFilter(categoryDrillFilter(item), true));
     strip.appendChild(segment);
   }
   els.categoryBreakdown.appendChild(strip);
@@ -1142,6 +1487,7 @@ function renderCategoryBreakdown(records) {
     visible.push({
       category: 'other',
       label: 'Остальное',
+      categories: tail.map((item) => item.category),
       amount: tail.reduce((sum, item) => sum + item.amount, 0),
       count: tail.reduce((sum, item) => sum + item.count, 0)
     });
@@ -1240,7 +1586,109 @@ function renderTopItems(records) {
     amount.className = 'top-item-amount';
     amount.textContent = formatRub(item.amount);
     li.append(text, amount);
+    makeClickable(li, () => setDetailFilter({
+      type: 'item',
+      source: item.source,
+      title: item.title,
+      label: item.title
+    }, true));
     els.topItems.appendChild(li);
+  }
+}
+
+function matchesDetailFilter(row, group) {
+  if (!detailFilter) return true;
+  if (detailFilter.type === 'refunds') return true;
+  if (detailFilter.type === 'source') return row.source === detailFilter.source;
+  if (detailFilter.type === 'category') return row.category === detailFilter.category;
+  if (detailFilter.type === 'categories') return detailFilter.categories.includes(row.category);
+  if (detailFilter.type === 'item') {
+    return row.source === detailFilter.source
+      && normalizeKeyText(row.title) === normalizeKeyText(detailFilter.title);
+  }
+  if (detailFilter.type === 'period') {
+    const date = parseRowDate(row.date);
+    return date && periodKey(date, group) === detailFilter.key;
+  }
+  return true;
+}
+
+function detailPageSize() {
+  return els.detailPageSize.value === 'all' ? Infinity : (Number(els.detailPageSize.value) || 60);
+}
+
+function resetDetailPaging() {
+  detailShownCount = detailPageSize();
+}
+
+function renderDetails(records, group) {
+  clearNode(els.detailRows);
+  const query = normalizeKeyText(els.detailSearch.value);
+  const isRefundDetails = detailFilter?.type === 'refunds';
+  const detailRecords = isRefundDetails
+    ? selectedRefundRows(selectedAnalyticsSources(), selectedDateRange())
+    : records;
+  const filtered = detailRecords
+    .filter((row) => matchesDetailFilter(row, group))
+    .filter((row) => !query || normalizeKeyText(row.title).includes(query))
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const limit = Math.min(detailShownCount, filtered.length);
+  const shown = filtered.slice(0, limit);
+
+  els.detailTitle.textContent = detailFilter ? detailFilterName().replace(/^детали: /, 'Детали: ') : 'Детали покупок';
+  els.detailSummary.textContent = filtered.length
+    ? `${formatCount(filtered.length, isRefundDetails ? ['возврат', 'возврата', 'возвратов'] : ['покупка', 'покупки', 'покупок'])}${filtered.length > shown.length ? ` · показано ${shown.length}` : ''}`
+    : '';
+  els.clearDetailFilter.hidden = !detailFilter && !query;
+  els.detailMore.hidden = filtered.length <= shown.length;
+  els.detailMore.textContent = `Показать ещё ${Math.min(detailPageSize(), filtered.length - shown.length)}`;
+
+  if (!filtered.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = isRefundDetails
+      ? 'Нет возвратов в выборке'
+      : (records.length ? 'Нет покупок для выбранной детализации' : 'Нет покупок в выборке');
+    els.detailRows.appendChild(empty);
+    return;
+  }
+
+  const header = document.createElement('div');
+  header.className = 'detail-row header';
+  for (const text of ['Дата', 'Источник', 'Товар', 'Категория', 'Сумма']) {
+    const cell = document.createElement('span');
+    cell.textContent = text;
+    header.appendChild(cell);
+  }
+  els.detailRows.appendChild(header);
+
+  for (const row of shown) {
+    const item = document.createElement('div');
+    item.className = 'detail-row';
+
+    const date = document.createElement('span');
+    date.textContent = shortDate(row.date);
+
+    const source = document.createElement('span');
+    source.className = 'source-label';
+    source.append(createSourceBadge(row.source), document.createTextNode(sourceLabels[row.source] || row.source));
+
+    const title = document.createElement('span');
+    title.className = 'detail-title';
+    title.textContent = row.title || '';
+    title.title = row.title || '';
+
+    const category = document.createElement('span');
+    category.className = 'category-pill';
+    category.style.setProperty('--category-color', categoryColor(row.category));
+    category.textContent = categoryName(row.category);
+
+    const amount = document.createElement('span');
+    amount.className = 'detail-amount';
+    amount.textContent = formatRub(isRefundDetails ? -Math.abs(Number(row.amount) || 0) : (Number(row.amount) || 0));
+
+    item.append(date, source, title, category, amount);
+    els.detailRows.appendChild(item);
   }
 }
 
@@ -1252,11 +1700,19 @@ function updateAnalytics() {
   const refunds = selectedRefundTotal(sources, range);
   const averageLabel = periodUnitLabels[group] || periodUnitLabels.month;
 
+  renderActiveFilters(sources);
   els.analyticsEmpty.textContent = hasCollected
-    ? 'За выбранный период покупок нет.'
-    : 'Выберите источники и нажмите «Собрать данные».';
+    ? (sources.size ? 'За выбранный период покупок нет.' : 'В фильтре отчёта выключены все источники.')
+    : 'Выберите маркетплейсы сверху и нажмите «Собрать данные». В этом профиле браузера нужно быть залогиненным в выбранные магазины.';
 
   els.analyticsTotal.textContent = formatRub(total);
+  const prevRange = previousRange(range);
+  const prevTotal = prevRange ? totalForRange(sources, prevRange) : 0;
+  const comparison = prevRange ? compareText(total, prevTotal) : '';
+  els.analyticsTotalCompare.textContent = comparison;
+  els.analyticsTotalCompare.className = comparison.startsWith('+')
+    ? 'up'
+    : (comparison.startsWith('-') ? 'down' : '');
   els.analyticsAverage.textContent = formatRub(periods.length ? total / periods.length : 0);
   els.analyticsAverageLabel.textContent = averageLabel;
   els.analyticsPurchases.textContent = String(records.length);
@@ -1268,6 +1724,7 @@ function updateAnalytics() {
   renderSourceBreakdown(records);
   renderCategoryBreakdown(records);
   renderTopItems(records);
+  renderDetails(records, group);
 }
 
 function updateResult(records, stats = {}) {
@@ -1277,14 +1734,16 @@ function updateResult(records, stats = {}) {
     ...cleaned.stats,
     serviceRowsDropped
   };
-  absorbedRefunds = cleaningStats.refundsAbsorbed || [];
+  absorbedRefunds = (cleaningStats.refundsAbsorbed || []).map(withCategory);
   rows = cleaned.rows.map(withCategory).sort((a, b) => String(a.date).localeCompare(String(b.date)));
   document.body.classList.toggle('has-data', rows.length > 0);
   csvText = makeCsv(rows);
-  els.downloadCsv.disabled = rows.length === 0;
+  updateCsvButton();
   updateDateInputBounds();
   logParserStats({ ...stats, cleaning: cleaningStats });
   updateAnalytics();
+  renderRunSummary();
+  return cleaningStats;
 }
 
 function downloadCsv() {
@@ -1322,7 +1781,17 @@ async function uploadCsv() {
 
     hasCollected = true;
     selectedPeriodKey = '';
-    updateResult(importedRows, {});
+    detailFilter = null;
+    resetDetailPaging();
+    lastRunAt = null;
+    lastRunKind = '';
+    lastWarningCount = 0;
+    runDetailsOpen = true;
+    collectStatuses = {};
+    renderSourceStatuses();
+    const cleaningStats = updateResult(importedRows, {});
+    renderQualitySummary(importedRows, {}, cleaningStats, []);
+    finishRun('Загружено');
     setStatus(`Загружено: ${rows.length} строк из ${file.name}.`, 1, 1);
     appendLog(`Загружен CSV: ${file.name}, строк ${rows.length}.`);
   } catch (error) {
@@ -1356,7 +1825,15 @@ async function collect() {
   showWarnings();
   hasCollected = false;
   selectedPeriodKey = '';
+  detailFilter = null;
+  resetDetailPaging();
+  lastRunAt = null;
+  lastRunKind = '';
+  lastWarningCount = 0;
+  runDetailsOpen = true;
   updateResult([], {});
+  renderQualitySummary();
+  setCollectStatuses(sources, 'waiting', 'ожидает');
   logLineByKey.clear();
   setStatus('Начинаю сбор...', 0, sources.length);
   appendLog(`Старт: ${sources.join(', ')}.`);
@@ -1373,16 +1850,24 @@ async function collect() {
     if (!response?.ok) throw new Error(response?.error || 'Не удалось собрать данные.');
 
     hasCollected = true;
-    updateResult(response.rows || [], response.stats || {});
     const warnings = response.warnings || [];
+    const cleaningStats = updateResult(response.rows || [], response.stats || {});
+    renderQualitySummary(response.rows || [], response.stats || {}, cleaningStats, warnings);
     showWarnings(warnings);
     for (const warning of warnings) appendLog(`Предупреждение: ${warning}`);
+    for (const source of sources) {
+      if (collectStatuses[source]?.state !== 'error') setCollectStatus(source, 'done', 'готово');
+    }
+    finishRun('Собрано', warnings.length);
     const downloadStatus = rows.length ? 'CSV готов к скачиванию' : 'строк для CSV нет';
     setStatus(`Готово: ${rows.length} строк, ${downloadStatus}.`, 1, 1);
     appendLog(`Готово: ${rows.length} строк, ${downloadStatus}.`);
   } catch (error) {
     setStatus(`Ошибка: ${error.message}`);
     showWarnings([error.message]);
+    for (const source of Object.keys(collectStatuses)) {
+      if (collectStatuses[source].state !== 'done') setCollectStatus(source, 'error', 'ошибка', error.message);
+    }
     appendLog(`Ошибка: ${error.message}`);
   } finally {
     els.collect.disabled = false;
@@ -1394,6 +1879,11 @@ api?.runtime?.onMessage?.addListener?.((message) => {
   if (message?.type === 'SPEND_PROGRESS') {
     const text = message.message || 'Сбор...';
     setStatus(text, message.value ?? null, message.max ?? null);
+    const source = sourceFromProgress(text);
+    if (source) {
+      const status = collectStatusFromProgress(text);
+      setCollectStatus(source, status.state, status.label, text);
+    }
     appendLog(text, progressLogKey(text));
   }
 });
@@ -1404,6 +1894,21 @@ els.uploadCsvInput.addEventListener('change', () => {
   uploadCsv().catch((error) => appendLog(`Ошибка загрузки CSV: ${error.message}`));
 });
 els.downloadCsv.addEventListener('click', downloadCsv);
+els.runDownloadCsv.addEventListener('click', downloadCsv);
+els.analyticsRefunds.parentElement.title = 'Показать учтённые возвраты';
+makeClickable(els.analyticsRefunds.parentElement, () => setDetailFilter({ type: 'refunds' }, true));
+els.toggleRunDetails.addEventListener('click', () => {
+  runDetailsOpen = !runDetailsOpen;
+  renderRunSummary();
+});
+makeClickable(els.warningBanner, () => {
+  if (els.warningBanner.hidden) return;
+  setActiveView('log');
+  requestAnimationFrame(() => {
+    els.log.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    els.log.focus();
+  });
+});
 els.copyLog.addEventListener('click', () => {
   copyLog().catch((error) => appendLog(`Ошибка копирования лога: ${error.message}`));
 });
@@ -1416,27 +1921,65 @@ for (const button of els.tabButtons) {
 for (const button of els.quickPeriodButtons) {
   button.addEventListener('click', () => applyQuickPeriod(button.dataset.period));
 }
+els.quickPeriodSelect.addEventListener('change', () => {
+  const period = els.quickPeriodSelect.value;
+  if (period === 'custom') {
+    els.dateFrom.focus();
+    return;
+  }
+  applyQuickPeriod(period);
+});
 els.periodGroup.addEventListener('change', () => {
   selectedPeriodKey = '';
+  detailFilter = null;
+  resetDetailPaging();
   updateAnalytics();
 });
 els.dateFrom.addEventListener('change', () => {
   selectedPeriodKey = '';
+  detailFilter = null;
+  els.quickPeriodSelect.value = 'custom';
+  resetDetailPaging();
   updateAnalytics();
 });
 els.dateTo.addEventListener('change', () => {
   selectedPeriodKey = '';
+  detailFilter = null;
+  els.quickPeriodSelect.value = 'custom';
+  resetDetailPaging();
   updateAnalytics();
 });
 els.resetPeriod.addEventListener('click', () => applyQuickPeriod('all'));
-els.analyticsOzon.addEventListener('change', updateAnalytics);
-els.analyticsWb.addEventListener('change', updateAnalytics);
-els.analyticsYandex.addEventListener('change', updateAnalytics);
+for (const input of [els.analyticsOzon, els.analyticsWb, els.analyticsYandex]) {
+  input.addEventListener('change', () => {
+    detailFilter = null;
+    resetDetailPaging();
+    updateAnalytics();
+  });
+}
 for (const [, input] of collectSourceInputs) {
   input.addEventListener('change', updateProgressFill);
 }
 els.categoryChartType.addEventListener('change', () => {
   localStorage.setItem(categoryChartTypeStorageKey, els.categoryChartType.value);
+  updateAnalytics();
+});
+els.clearDetailFilter.addEventListener('click', () => {
+  detailFilter = null;
+  els.detailSearch.value = '';
+  resetDetailPaging();
+  updateAnalytics();
+});
+els.detailSearch.addEventListener('input', () => {
+  resetDetailPaging();
+  updateAnalytics();
+});
+els.detailPageSize.addEventListener('change', () => {
+  resetDetailPaging();
+  updateAnalytics();
+});
+els.detailMore.addEventListener('click', () => {
+  detailShownCount += detailPageSize();
   updateAnalytics();
 });
 els.clearLog.addEventListener('click', () => {
@@ -1450,3 +1993,5 @@ applyTheme(loadTheme());
 updateProgressFill();
 renderLog();
 updateAnalytics();
+checkForUpdate();
+loadCategoryRulePack();
