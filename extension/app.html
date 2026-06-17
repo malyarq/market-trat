@@ -76,9 +76,15 @@
             <span class="select-control">
               <select id="quickPeriodSelect">
                 <option value="all">Весь период</option>
+                <option value="last-7-days">Последние 7 дней</option>
+                <option value="last-30-days">Последние 30 дней</option>
+                <option value="last-90-days">Последние 90 дней</option>
                 <option value="this-month">Этот месяц</option>
                 <option value="prev-month">Прошлый месяц</option>
+                <option value="this-quarter">Этот квартал</option>
+                <option value="prev-quarter">Прошлый квартал</option>
                 <option value="this-year">Этот год</option>
+                <option value="prev-year">Прошлый год</option>
                 <option value="custom">Свой период</option>
               </select>
             </span>
@@ -102,8 +108,12 @@
             <span>по</span>
             <input id="dateTo" type="date">
           </label>
+          <button type="button" class="secondary quick-period" data-period="last-7-days">7 дней</button>
+          <button type="button" class="secondary quick-period" data-period="last-30-days">30 дней</button>
+          <button type="button" class="secondary quick-period" data-period="last-90-days">90 дней</button>
           <button type="button" class="secondary quick-period" data-period="this-month">Этот месяц</button>
           <button type="button" class="secondary quick-period" data-period="prev-month">Прошлый месяц</button>
+          <button type="button" class="secondary quick-period" data-period="this-quarter">Этот квартал</button>
           <button type="button" class="secondary quick-period" data-period="this-year">Этот год</button>
           <button id="resetPeriod" type="button" class="secondary">Весь период</button>
           <span class="control-label">Фильтр отчёта</span>
@@ -133,7 +143,7 @@
 
       <div class="analytics-kpis">
         <div><strong id="analyticsTotal">0</strong><span>итого, ₽</span><small id="analyticsTotalCompare"></small></div>
-        <div><strong id="analyticsAverage">0</strong><span id="analyticsAverageLabel">покупки, ₽</span></div>
+        <div><strong id="analyticsAverage">0</strong><span id="analyticsAverageLabel">в среднем за месяц</span></div>
         <div><strong id="analyticsRefunds">0</strong><span>возвраты, ₽</span></div>
         <div><strong id="analyticsPurchases">0</strong><span id="analyticsPurchasesLabel">операций</span></div>
       </div>

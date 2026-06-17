@@ -134,6 +134,12 @@ vm.runInContext('rows = orderRecords', context);
 const orderedAnalytics = context.buildAnalyticsData(new Set(['ozon']), 'month');
 const categoryOrder = new Map(context.buildCategoryBreakdown(orderRecords).entries.map((item, index) => [item.category, index]));
 assert.equal(context.periodChartSegments(orderedAnalytics.periods[0], categoryOrder).map((item) => item.key).join(','), 'A,B');
+assert.equal(context.averageForPeriods(orderedAnalytics.total, orderedAnalytics.periods), 76);
+assert.equal(context.averagePeriodLabel('week'), 'в среднем за неделю');
+assert.equal(JSON.stringify(context.quickPeriodRange('last-7-days', new Date(2024, 5, 17))), '{"from":"2024-06-11","to":"2024-06-17"}');
+assert.equal(JSON.stringify(context.quickPeriodRange('this-quarter', new Date(2024, 5, 17))), '{"from":"2024-04-01","to":"2024-06-30"}');
+assert.equal(JSON.stringify(context.quickPeriodRange('prev-quarter', new Date(2024, 0, 17))), '{"from":"2023-10-01","to":"2023-12-31"}');
+assert.equal(JSON.stringify(context.quickPeriodRange('prev-year', new Date(2024, 5, 17))), '{"from":"2023-01-01","to":"2023-12-31"}');
 
 const exportRecords = [
   { date: '2024-01-10', source: 'ozon', title: 'Jan', amount: '10.00', currency: 'RUB', category: 'A', type: 'purchase' },

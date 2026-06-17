@@ -1036,23 +1036,53 @@ function setDateRange(from, to) {
   updateAnalytics();
 }
 
-function applyQuickPeriod(period) {
-  const today = new Date();
+function quickPeriodRange(period, today = new Date()) {
   const year = today.getFullYear();
   const month = today.getMonth();
+  const day = today.getDate();
+  const rollingDays = {
+    'last-7-days': 7,
+    'last-30-days': 30,
+    'last-90-days': 90
+  }[period];
+
+  if (rollingDays) {
+    return {
+      from: localInputDate(new Date(year, month, day - rollingDays + 1)),
+      to: localInputDate(new Date(year, month, day))
+    };
+  }
+  if (period === 'this-month') {
+    return {
+      from: localInputDate(new Date(year, month, 1)),
+      to: localInputDate(new Date(year, month + 1, 0))
+    };
+  }
+  if (period === 'prev-month') {
+    return {
+      from: localInputDate(new Date(year, month - 1, 1)),
+      to: localInputDate(new Date(year, month, 0))
+    };
+  }
+  if (period === 'this-quarter' || period === 'prev-quarter') {
+    const quarterStart = Math.floor(month / 3) * 3;
+    const startMonth = period === 'this-quarter' ? quarterStart : quarterStart - 3;
+    return {
+      from: localInputDate(new Date(year, startMonth, 1)),
+      to: localInputDate(new Date(year, startMonth + 3, 0))
+    };
+  }
+  if (period === 'this-year') return { from: `${year}-01-01`, to: `${year}-12-31` };
+  if (period === 'prev-year') return { from: `${year - 1}-01-01`, to: `${year - 1}-12-31` };
+  return { from: '', to: '' };
+}
+
+function applyQuickPeriod(period) {
   selectedPeriodKey = '';
   resetDetailPaging();
   if (els.quickPeriodSelect.value !== period) els.quickPeriodSelect.value = period || 'all';
-
-  if (period === 'this-month') {
-    setDateRange(localInputDate(new Date(year, month, 1)), localInputDate(new Date(year, month + 1, 0)));
-  } else if (period === 'prev-month') {
-    setDateRange(localInputDate(new Date(year, month - 1, 1)), localInputDate(new Date(year, month, 0)));
-  } else if (period === 'this-year') {
-    setDateRange(`${year}-01-01`, `${year}-12-31`);
-  } else {
-    setDateRange('', '');
-  }
+  const range = quickPeriodRange(period);
+  setDateRange(range.from, range.to);
 }
 
 function periodBounds(key, group) {
@@ -1170,8 +1200,17 @@ function selectedRefundRows(sources, range) {
   });
 }
 
-function selectedPurchaseTotal(records) {
-  return records.reduce((sum, row) => (isRefundRow(row) ? sum : sum + rowAmount(row)), 0);
+function averageForPeriods(total, periods) {
+  return periods.length ? total / periods.length : 0;
+}
+
+function averagePeriodLabel(group) {
+  return ({
+    day: 'в среднем за день',
+    week: 'в среднем за неделю',
+    month: 'в среднем за месяц',
+    year: 'в среднем за год'
+  })[group] || 'в среднем';
 }
 
 function totalForRange(sources, range) {
@@ -2168,7 +2207,6 @@ function updateAnalytics() {
   const group = els.periodGroup.value;
   const { records, periods, total, range } = buildAnalyticsData(sources, group);
   const refunds = selectedRefundTotal(sources, range);
-  const purchases = selectedPurchaseTotal(records);
   const prevRange = previousRange(range);
   const prevTotal = prevRange ? totalForRange(sources, prevRange) : 0;
   const previousRecords = prevRange ? recordsForRange(sources, prevRange) : [];
@@ -2187,8 +2225,8 @@ function updateAnalytics() {
   els.analyticsTotalCompare.className = comparison.startsWith('+')
     ? 'up'
     : (comparison.startsWith('-') ? 'down' : '');
-  els.analyticsAverage.textContent = formatRub(purchases);
-  els.analyticsAverageLabel.textContent = 'покупки, ₽';
+  els.analyticsAverage.textContent = formatRub(averageForPeriods(total, periods));
+  els.analyticsAverageLabel.textContent = averagePeriodLabel(group);
   els.analyticsPurchases.textContent = String(records.length);
   els.analyticsPurchasesLabel.textContent = pluralRu(records.length, ['операция', 'операции', 'операций']);
   els.analyticsRefunds.textContent = formatRub(refunds);
@@ -2421,8 +2459,8 @@ els.downloadCsv.addEventListener('click', downloadCsv);
 els.runDownloadCsv.addEventListener('click', downloadCsv);
 els.analyticsTotal.parentElement.title = 'Показать все операции';
 makeClickable(els.analyticsTotal.parentElement, () => showKpiDetails('all'));
-els.analyticsAverage.parentElement.title = 'Показать покупки';
-makeClickable(els.analyticsAverage.parentElement, () => showKpiDetails('purchase'));
+els.analyticsAverage.parentElement.title = 'Показать операции в расчёте среднего';
+makeClickable(els.analyticsAverage.parentElement, () => showKpiDetails('all'));
 els.analyticsRefunds.parentElement.title = 'Показать возвраты';
 makeClickable(els.analyticsRefunds.parentElement, () => showKpiDetails('refund'));
 els.analyticsPurchases.parentElement.title = 'Показать все операции';
