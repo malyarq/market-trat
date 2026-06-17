@@ -38,6 +38,25 @@
     return Math.max(1, Math.min(max, Math.floor(parsed)));
   }
 
+  function knownReceiptSet(values) {
+    return new Set((Array.isArray(values) ? values : []).map((value) => String(value || '').trim()).filter(Boolean));
+  }
+
+  function knownTailLimit(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) return 30;
+    return Math.min(200, Math.floor(parsed));
+  }
+
+  function reachedKnownBoundary(items, isKnown, state, tailLimit) {
+    if (!state.enabled) return false;
+    for (const item of items || []) {
+      if (!state.hit && isKnown(item)) state.hit = true;
+      else if (state.hit) state.tailSeen += 1;
+    }
+    return state.hit && state.tailSeen >= tailLimit;
+  }
+
   async function mapWithConcurrency(items, concurrency, worker) {
     const results = new Array(items.length);
     let nextIndex = 0;
@@ -298,6 +317,7 @@
       receipt_url: fallbackRecord.receipt_url || '',
       raw_title: fallbackRecord.raw_title || fallbackRecord.title || '',
       raw_amount: String(item.amount),
+      item_index: String(item.itemIndex || ''),
       __ozonSettlementKind: settlementKind || ''
     };
   }
@@ -451,6 +471,10 @@
       }
 
       if (String(row.title || '').startsWith('Ozon PDF не разобран')) {
+        if (!row.date && !ozonAmountCents(row.amount)) {
+          adjustmentRowsDropped += 1;
+          continue;
+        }
         directRows.push(row);
         continue;
       }
@@ -569,7 +593,7 @@
       const amount = extractOzonItemAmount(itemLines);
       const title = titleParts.join(' ').replace(/\s+/g, ' ').trim();
       if (!title || !amount) continue;
-      items.push({ title, amount });
+      items.push({ title, amount, itemIndex: items.length + 1 });
     }
 
     if (!items.length) {
@@ -577,7 +601,8 @@
       if (!total) return [];
       items.push({
         title: `Ozon PDF: ${fallbackRecord.title || fallbackRecord.marketplace_id || 'чек'}`,
-        amount: total
+        amount: total,
+        itemIndex: 1
       });
     }
 
@@ -882,11 +907,14 @@
     }
   }
 
-  async function collectOzon({ maxPages, parsePdf, pdfConcurrency, apiPauseMs }) {
+  async function collectOzon({ maxPages, parsePdf, pdfConcurrency, apiPauseMs, knownReceipts, knownReceiptTail }) {
     if (!/^https:\/\/(?:www\.)?ozon\.ru\//.test(location.href)) {
       throw new Error('Ozon: открыта не вкладка Ozon.');
     }
 
+    const known = knownReceiptSet(knownReceipts);
+    const knownState = { enabled: known.size > 0, hit: false, tailSeen: 0 };
+    const tailLimit = knownTailLimit(knownReceiptTail);
     const recordsByKey = new Map();
     const visitedNextPages = new Set();
     let pagesFetched = 0;
@@ -896,6 +924,12 @@
         const key = ozonRecordKey(record);
         if (key && !recordsByKey.has(key)) recordsByKey.set(key, record);
       }
+      return reachedKnownBoundary(
+        records,
+        (record) => known.has(String(record.marketplace_id || '').trim()) || known.has(String(record.receipt_url || '').trim()),
+        knownState,
+        tailLimit
+      );
     }
 
     function claimNextPage(rawNextPage) {
@@ -910,7 +944,7 @@
       const firstPageText = await fetchText(startUrl).catch(() => '');
       if (!firstPageText) return;
 
-      remember(extractOzonCheques(firstPageText));
+      if (remember(extractOzonCheques(firstPageText))) return;
       let nextPage = extractOzonNextPage(firstPageText);
 
       while (true) {
@@ -919,8 +953,12 @@
 
         const apiUrl = `${location.origin}/api/entrypoint-api.bx/page/json/v2?url=${encodeURIComponent(claimed.nextPage)}`;
         const text = await fetchText(apiUrl);
-        remember(extractOzonCheques(text));
+        const shouldStop = remember(extractOzonCheques(text));
         sendProgress(`Ozon: найдено ${recordsByKey.size}, API-страница ${claimed.pageNumber}.`, claimed.pageNumber, maxPages);
+        if (shouldStop) {
+          sendProgress(`Ozon: дошёл до уже загруженных чеков, остановка после хвоста ${tailLimit}.`, claimed.pageNumber, maxPages);
+          break;
+        }
         nextPage = extractOzonNextPage(text);
         if (apiPauseMs > 0) await sleep(apiPauseMs);
       }
@@ -957,7 +995,9 @@
 
     const records = [...recordsByKey.values()];
     sendProgress(`Ozon: найдено ссылок на чеки ${records.length}, начинаю PDF-разбор.`, 0, records.length);
-    return rowsFromOzonPdfs(records, parsePdf, pdfConcurrency);
+    const result = await rowsFromOzonPdfs(records, parsePdf, pdfConcurrency);
+    result.stats.incrementalStopped = knownState.hit;
+    return result;
   }
 
   function readCookie(name) {
@@ -1070,12 +1110,15 @@
     return [...new Set([requested, 50, 10].filter((size) => size <= requested))];
   }
 
-  async function collectWildberries({ maxPages, pageSize, apiPauseMs }) {
+  async function collectWildberries({ maxPages, pageSize, apiPauseMs, knownReceipts, knownReceiptTail }) {
     if (!/^https:\/\/(?:www\.)?wildberries\.ru\//.test(location.href)) {
       throw new Error('Wildberries: открыта не вкладка Wildberries.');
     }
 
     const token = await getWbJwtToken();
+    const known = knownReceiptSet(knownReceipts);
+    const knownState = { enabled: known.size > 0, hit: false, tailSeen: 0 };
+    const tailLimit = knownTailLimit(knownReceiptTail);
     const receiptsByUid = new Map();
     const seenCursors = new Set();
     const pageSizes = wbPageSizeCandidates(pageSize);
@@ -1107,6 +1150,15 @@
       }
 
       sendProgress(`Wildberries: найдено чеков ${receiptsByUid.size}, API-страница ${pagesFetched}.`, pagesFetched, maxPages);
+      if (reachedKnownBoundary(
+        page.receipts,
+        (receipt) => known.has(String(receipt.receiptUid || '').trim()) || known.has(String(receipt.link || '').trim()),
+        knownState,
+        tailLimit
+      )) {
+        sendProgress(`Wildberries: дошёл до уже загруженных чеков, остановка после хвоста ${tailLimit}.`, pagesFetched, maxPages);
+        break;
+      }
       if (!page.nextReceiptUid) break;
       nextReceiptUid = page.nextReceiptUid;
       if (apiPauseMs > 0) await sleep(apiPauseMs);
@@ -1121,7 +1173,8 @@
       stats: {
         receipts: receiptsByUid.size,
         apiPages: pagesFetched,
-        pageSize: activePageSize
+        pageSize: activePageSize,
+        incrementalStopped: knownState.hit
       }
     };
   }
@@ -1382,23 +1435,32 @@
     }
   }
 
-  async function collectYandex({ maxPages, apiPauseMs, receiptConcurrency, metadataOnly }) {
+  async function collectYandex({ maxPages, apiPauseMs, receiptConcurrency, metadataOnly, knownOrderIds, knownReceiptTail }) {
     if (!/^https:\/\/market\.yandex\.ru\//.test(location.href)) {
       throw new Error('Яндекс Маркет: открыта не вкладка market.yandex.ru.');
     }
 
     const startHtml = document.documentElement?.innerHTML || await fetchText(`${location.origin}/my/orders?filter=COMPLETED`);
     const orderIds = new Set();
-    for (const id of extractYandexOrderIdsFromHtml(startHtml)) orderIds.add(id);
+    const knownOrders = knownReceiptSet(knownOrderIds);
+    const knownState = { enabled: knownOrders.size > 0, hit: false, tailSeen: 0 };
+    const tailLimit = knownTailLimit(knownReceiptTail);
+
+    function rememberOrderIds(ids) {
+      for (const id of ids) orderIds.add(id);
+      return reachedKnownBoundary(ids, (id) => knownOrders.has(String(id || '').trim()), knownState, tailLimit);
+    }
+
+    let stopByKnown = rememberOrderIds(extractYandexOrderIdsFromHtml(startHtml));
 
     const currentOrder = location.pathname.match(/^\/my\/order\/(\d+)/)?.[1];
-    if (currentOrder) orderIds.add(currentOrder);
+    if (currentOrder) stopByKnown = rememberOrderIds([currentOrder]) || stopByKnown;
 
     let pageToken = extractYandexPageTokenFromHtml(startHtml);
     let pagesFetched = orderIds.size ? 1 : 0;
     const shouldTryNext = hasYandexNextOrdersPage(startHtml);
 
-    if (pageToken && shouldTryNext) {
+    if (pageToken && shouldTryNext && !stopByKnown) {
       while (pagesFetched < maxPages) {
         try {
           const page = parseYandexOrdersResolve(await fetchYandexResolveAny(
@@ -1408,8 +1470,12 @@
             apiPauseMs
           ));
           pagesFetched += 1;
-          for (const id of page.ids) orderIds.add(id);
+          stopByKnown = rememberOrderIds(page.ids);
           sendProgress(`Яндекс Маркет: найдено заказов ${orderIds.size}, API-страница ${pagesFetched}.`, pagesFetched, maxPages);
+          if (stopByKnown) {
+            sendProgress(`Яндекс Маркет: дошёл до уже загруженных заказов, остановка после хвоста ${tailLimit}.`, pagesFetched, maxPages);
+            break;
+          }
           if (!page.pageToken || !page.ids.length) break;
           pageToken = page.pageToken;
           if (apiPauseMs > 0) await sleep(apiPauseMs);
@@ -1435,7 +1501,8 @@
         headers: yandexClientHeaders('/my/orders?filter=COMPLETED'),
         stats: {
           orders: ids.length,
-          apiPages: pagesFetched
+          apiPages: pagesFetched,
+          incrementalStopped: knownState.hit
         }
       };
     }
@@ -1501,6 +1568,7 @@
         orders: ids.length,
         receipts: receiptsByUrl.size,
         apiPages: pagesFetched,
+        incrementalStopped: knownState.hit,
         archivedOrders,
         noReceiptOrders,
         failedOrders: failedOrders.length,
@@ -1519,20 +1587,26 @@
         maxPages: Math.max(1, Number(options.maxPages) || 1000),
         parsePdf: options.parsePdf !== false,
         pdfConcurrency: options.pdfConcurrency,
-        apiPauseMs: Math.max(0, Number(options.apiPauseMs) || 0)
+        apiPauseMs: Math.max(0, Number(options.apiPauseMs) || 0),
+        knownReceipts: options.knownReceipts,
+        knownReceiptTail: options.knownReceiptTail
       });
     } else if (message.source === 'wildberries') {
       promise = collectWildberries({
         maxPages: Math.max(1, Number(options.maxPages) || 2000),
         pageSize: Math.max(1, Math.min(100, Number(options.pageSize) || 10)),
-        apiPauseMs: Math.max(0, Number(options.apiPauseMs) || 0)
+        apiPauseMs: Math.max(0, Number(options.apiPauseMs) || 0),
+        knownReceipts: options.knownReceipts,
+        knownReceiptTail: options.knownReceiptTail
       });
     } else if (message.source === 'yandex') {
       promise = collectYandex({
         maxPages: Math.max(1, Number(options.maxPages) || 200),
         apiPauseMs: Math.max(0, Number(options.apiPauseMs) || 0),
         receiptConcurrency: options.receiptConcurrency,
-        metadataOnly: options.metadataOnly === true
+        metadataOnly: options.metadataOnly === true,
+        knownOrderIds: options.knownOrderIds,
+        knownReceiptTail: options.knownReceiptTail
       });
     } else {
       promise = Promise.reject(new Error(`${message.source}: неизвестный источник`));

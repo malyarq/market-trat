@@ -6,7 +6,10 @@ const csvColumns = [
   { header: 'title', field: 'title' },
   { header: 'amount', field: 'amount' },
   { header: 'currency', field: 'currency' },
-  { header: 'category', field: 'category' }
+  { header: 'category', field: 'category' },
+  { header: 'type', field: 'type' },
+  { header: 'marketplace_id', field: 'marketplace_id' },
+  { header: 'item_index', field: 'item_index' }
 ];
 
 const els = {
@@ -53,14 +56,22 @@ const els = {
   analyticsRefunds: document.getElementById('analyticsRefunds'),
   chartRange: document.getElementById('chartRange'),
   periodChart: document.getElementById('periodChart'),
+  periodChartMode: document.getElementById('periodChartMode'),
   sourceBreakdown: document.getElementById('sourceBreakdown'),
   categoryBreakdown: document.getElementById('categoryBreakdown'),
   categorySummary: document.getElementById('categorySummary'),
   categoryChartType: document.getElementById('categoryChartType'),
+  copyReport: document.getElementById('copyReport'),
+  spendReport: document.getElementById('spendReport'),
+  budgetCategory: document.getElementById('budgetCategory'),
+  budgetAmount: document.getElementById('budgetAmount'),
+  saveBudget: document.getElementById('saveBudget'),
+  budgetBreakdown: document.getElementById('budgetBreakdown'),
   detailTitle: document.getElementById('detailTitle'),
   detailSummary: document.getElementById('detailSummary'),
   detailSearch: document.getElementById('detailSearch'),
   detailPageSize: document.getElementById('detailPageSize'),
+  detailOperationButtons: [...document.querySelectorAll('.detail-operation')],
   detailMore: document.getElementById('detailMore'),
   clearDetailFilter: document.getElementById('clearDetailFilter'),
   detailRows: document.getElementById('detailRows'),
@@ -81,12 +92,17 @@ const defaultCollectOptions = {
   yandexReceiptConcurrency: 2,
   ozonApiPauseMs: 0,
   wbApiPauseMs: 0,
-  yandexApiPauseMs: 300
+  yandexApiPauseMs: 300,
+  knownReceiptTail: 30
 };
+const knownReceiptLimit = 3000;
 
 const logStorageKey = 'markettrat-log-v1';
 const themeStorageKey = 'markettrat-theme-v1';
 const categoryChartTypeStorageKey = 'markettrat-category-chart-v1';
+const periodChartModeStorageKey = 'markettrat-period-chart-mode-v1';
+const lastRunStorageKey = 'markettrat-last-run-v1';
+const budgetStorageKey = 'markettrat-budgets-v1';
 const sourceLabels = {
   ozon: 'Ozon',
   wildberries: 'Wildberries',
@@ -107,12 +123,6 @@ const collectSourceInputs = [
   ['wildberries', els.sourceWb],
   ['yandex', els.sourceYandex]
 ];
-const periodUnitLabels = {
-  day: 'среднее за день',
-  week: 'среднее за неделю',
-  month: 'среднее за месяц',
-  year: 'среднее за год'
-};
 const categoryLabels = {
   unknown: 'Без категории'
 };
@@ -122,7 +132,6 @@ const categoryColors = {
   'Благотворительность': '#10b981',
   'Бытовая химия': '#14b8a6',
   'Бытовая техника': '#0ea5e9',
-  'Доставка': '#94a3b8',
   'Дом': '#8b5cf6',
   'Детям': '#ec4899',
   'Здоровье': '#22c55e',
@@ -133,7 +142,6 @@ const categoryColors = {
   'Красота и уход': '#d946ef',
   'Одежда': '#06b6d4',
   'Обувь': '#6366f1',
-  'Пакеты и упаковка': '#78716c',
   'Подписки': '#7c3aed',
   'Продукты': '#84cc16',
   'Ремонт': '#eab308',
@@ -151,19 +159,22 @@ const amountFormatter = new Intl.NumberFormat('ru-RU', {
   maximumFractionDigits: 2
 });
 let rows = [];
-let absorbedRefunds = [];
 let csvText = '';
 let logLines = loadStoredLog();
+let budgets = loadBudgets();
 let hasCollected = false;
 let selectedPeriodKey = '';
 let categoriesExpanded = false;
 let detailFilter = null;
+let detailOperation = 'all';
+let detailSort = { field: 'date', direction: 'desc' };
 let collectStatuses = {};
 let runDetailsOpen = true;
 let lastRunAt = null;
 let lastRunKind = '';
 let lastWarningCount = 0;
 let detailShownCount = 60;
+let currentReportText = '';
 const logLineByKey = new Map();
 let logRenderScheduled = false;
 
@@ -213,6 +224,67 @@ function storeLog() {
     localStorage.setItem(logStorageKey, JSON.stringify(logLines.slice(-500)));
   } catch {
     // Log persistence is best effort; collection must not depend on it.
+  }
+}
+
+function loadBudgets() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(budgetStorageKey) || '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed)
+      .map(([category, amount]) => [category, Number(amount)])
+      .filter(([category, amount]) => category && Number.isFinite(amount) && amount > 0));
+  } catch {
+    return {};
+  }
+}
+
+function storeBudgets() {
+  try {
+    localStorage.setItem(budgetStorageKey, JSON.stringify(budgets));
+  } catch {
+    // Budgets are local convenience data; the report still works without persistence.
+  }
+}
+
+function storeLastRun() {
+  if (!rows.length || !lastRunAt) return;
+  try {
+    localStorage.setItem(lastRunStorageKey, JSON.stringify({
+      rows,
+      at: lastRunAt.toISOString(),
+      kind: lastRunKind,
+      warningCount: lastWarningCount
+    }));
+  } catch {
+    appendLog('Предупреждение: последний отчёт не поместился в localStorage.');
+  }
+}
+
+function restoreLastRun() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(lastRunStorageKey) || 'null');
+    if (!saved?.rows?.length) return false;
+    const deduped = dedupeRows(saved.rows.map((row) => withCategory(withOperation(row))));
+    rows = deduped.rows;
+    csvText = makeCsv(rows);
+    hasCollected = true;
+    lastRunAt = saved.at ? new Date(saved.at) : new Date();
+    lastRunKind = saved.kind || 'Последний отчёт';
+    lastWarningCount = Number(saved.warningCount) || 0;
+    runDetailsOpen = false;
+    document.body.classList.toggle('has-data', rows.length > 0);
+    updateCsvButton();
+    updateDateInputBounds();
+    renderQualitySummary(rows, {}, { duplicateRowsDropped: deduped.duplicates }, []);
+    renderRunSummary();
+    setStatus(`Открыт сохранённый отчёт: ${rows.length} строк.`, 1, 1);
+    appendLog(`Открыт сохранённый отчёт: строк ${rows.length}.`);
+    updateAnalytics();
+    return true;
+  } catch {
+    localStorage.removeItem(lastRunStorageKey);
+    return false;
   }
 }
 
@@ -351,6 +423,7 @@ function finishRun(kind, warningCount = 0) {
   lastWarningCount = warningCount;
   runDetailsOpen = false;
   renderRunSummary();
+  storeLastRun();
 }
 
 function appendLog(text, key = '') {
@@ -520,24 +593,49 @@ function renderQualitySummary(rawRecords = [], stats = {}, cleaningStats = {}, w
   els.qualitySummary.hidden = !hasAnything;
   if (!hasAnything) return;
 
-  const parts = [
-    `CSV: ${formatCount(rows.length, ['строка', 'строки', 'строк'])}`,
-    `исходно: ${formatCount(rawRecords.length, ['строка', 'строки', 'строк'])}`
-  ];
-  if (cleaningStats.refundRowsAbsorbed) {
-    parts.push(`возвраты: ${formatRub(cleaningStats.refundAmountAbsorbed)}`);
-  }
-  if (cleaningStats.serviceRowsDropped) {
-    parts.push(`служебные строки: ${cleaningStats.serviceRowsDropped}`);
-  }
-  const unread = unreadReceiptCount(stats);
-  if (unread) parts.push(`не прочитано чеков: ${unread}`);
-  if (warnings.length) parts.push(`предупреждения: ${warnings.length}`);
+  const addCard = (title, lines, kind = '') => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = `quality-card ${kind}`.trim();
+    const strong = document.createElement('strong');
+    strong.textContent = title;
+    const text = document.createElement('span');
+    text.textContent = lines.filter(Boolean).join(' · ');
+    card.append(strong, text);
+    card.addEventListener('click', () => setActiveView('log'));
+    els.qualitySummary.appendChild(card);
+  };
 
-  for (const part of parts) {
-    const item = document.createElement('span');
-    item.textContent = part;
-    els.qualitySummary.appendChild(item);
+  addCard('CSV', [
+    formatCount(rows.length, ['строка', 'строки', 'строк']),
+    rawRecords.length ? `исходно ${rawRecords.length}` : '',
+    cleaningStats.duplicateRowsDropped ? `дубли ${cleaningStats.duplicateRowsDropped}` : ''
+  ]);
+
+  for (const source of ['ozon', 'wildberries', 'yandex']) {
+    const item = stats[source] || {};
+    const receipts = Number(item.receipts) || 0;
+    const parsed = Number(item.parsedReceipts) || 0;
+    const unread = Math.max(0, receipts - parsed);
+    if (!receipts && !item.itemRows && !item.orders) continue;
+    addCard(sourceLabels[source] || source, [
+      receipts ? `чеков ${parsed}/${receipts}` : '',
+      item.itemRows ? `строк ${item.itemRows}` : '',
+      item.noReceiptOrders ? `без чеков ${item.noReceiptOrders}` : '',
+      item.failedOrders ? `ошибок заказов ${item.failedOrders}` : '',
+      unread ? `не прочитано ${unread}` : ''
+    ], unread || item.failedOrders ? 'warning' : '');
+  }
+
+  if (cleaningStats.refundRows || cleaningStats.serviceRowsDropped) {
+    addCard('Очистка', [
+      cleaningStats.refundRows ? `возвраты ${formatRub(cleaningStats.refundAmount)}` : '',
+      cleaningStats.serviceRowsDropped ? `служебные строки ${cleaningStats.serviceRowsDropped}` : ''
+    ]);
+  }
+
+  if (warnings.length) {
+    addCard('Предупреждения', [`${warnings.length}`, warnings[0]], 'warning');
   }
 }
 
@@ -555,12 +653,73 @@ function makeCsv(records) {
   return `${lines.join('\n')}\n`;
 }
 
+function dedupeRows(records) {
+  return globalThis.mergeSpendRows
+    ? globalThis.mergeSpendRows(records)
+    : { rows: records, duplicates: 0 };
+}
+
+function collectKnownReceipts(records) {
+  const result = {
+    ozon: [],
+    wildberries: [],
+    yandexOrders: []
+  };
+  const seen = Object.fromEntries(Object.keys(result).map((key) => [key, new Set()]));
+
+  function add(bucket, value) {
+    const key = String(value || '').trim();
+    if (!key || !result[bucket] || seen[bucket].has(key) || result[bucket].length >= knownReceiptLimit) return;
+    seen[bucket].add(key);
+    result[bucket].push(key);
+  }
+
+  const newestFirst = [...records].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  for (const row of newestFirst) {
+    const source = row.source;
+    if (source === 'ozon' || source === 'wildberries') {
+      add(source, row.marketplace_id);
+      add(source, row.receipt_url);
+    } else if (source === 'yandex') {
+      add('yandexOrders', String(row.marketplace_id || '').split(':')[0]);
+    }
+  }
+
+  return result;
+}
+
+function hasKnownReceipts(knownReceipts) {
+  return Object.values(knownReceipts || {}).some((items) => items?.length);
+}
+
+function rowAmount(row) {
+  return Number(row.amount) || 0;
+}
+
+function isRefundRow(row) {
+  return String(row.type || '').toLowerCase() === 'refund'
+    || String(row.is_return || '') === '1'
+    || rowAmount(row) < 0;
+}
+
+function withOperation(row) {
+  const type = isRefundRow(row) ? 'refund' : 'purchase';
+  const amount = Math.abs(rowAmount(row));
+  return {
+    ...row,
+    amount: (type === 'refund' ? -amount : amount).toFixed(2),
+    type,
+    is_return: type === 'refund' ? '1' : '0'
+  };
+}
+
 function withCategory(row) {
   const category = String(row.category || '').trim();
   const guessed = globalThis.guessSpendCategory?.(row.title) || 'unknown';
+  const normalized = category === 'Пакеты и упаковка' ? 'Продукты' : category;
   return {
     ...row,
-    category: !category || category.toLowerCase() === 'unknown' ? guessed : category
+    category: !normalized || normalized.toLowerCase() === 'unknown' ? guessed : normalized
   };
 }
 
@@ -577,12 +736,8 @@ function loadCategoryChartType() {
   return saved === 'donut' || saved === 'tiles' ? saved : 'bars';
 }
 
-function cents(value) {
-  return Math.round((Number(value) || 0) * 100);
-}
-
-function centsToAmount(value) {
-  return (value / 100).toFixed(2);
+function loadPeriodChartMode() {
+  return localStorage.getItem(periodChartModeStorageKey) === 'category' ? 'category' : 'source';
 }
 
 function normalizeKeyText(text) {
@@ -593,109 +748,10 @@ function normalizeKeyText(text) {
     .toLowerCase();
 }
 
-function orderKey(row) {
-  const rawTitleMatch = String(row?.raw_title || '').match(/Заказ №(\S+)/);
-  if (rawTitleMatch) return rawTitleMatch[1];
-  const receiptId = String(row?.receipt_url || '').match(/[?&]id=([^&]+)/)?.[1] || row?.marketplace_id || '';
-  const idPrefixMatch = String(receiptId).match(/^(.+?)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-\d+-\d+)?$/i);
-  if (idPrefixMatch) return idPrefixMatch[1];
-  return '';
-}
-
-function returnMatchKey(row, includeOrder) {
-  return [
-    row.source || '',
-    includeOrder ? orderKey(row) : '',
-    normalizeKeyText(row.title)
-  ].join('\u0001');
-}
-
-function absorbReturns(records) {
-  const positives = [];
-  const refunds = [];
-  const stats = {
-    refundRowsAbsorbed: 0,
-    refundRowsUnmatched: 0,
-    refundAmountAbsorbed: 0,
-    refundAmountAbsorbedBySource: {},
-    refundsAbsorbed: []
-  };
-
-  for (const record of records) {
-    const amountCents = cents(record.amount);
-    if (amountCents < 0) {
-      refunds.push({ row: record, remaining: Math.abs(amountCents) });
-    } else if (amountCents > 0) {
-      positives.push({ row: { ...record }, remaining: amountCents });
-    }
-  }
-
-  const positivesByOrder = new Map();
-  const positivesByTitle = new Map();
-
-  for (const item of positives) {
-    for (const [map, includeOrder] of [[positivesByOrder, true], [positivesByTitle, false]]) {
-      const key = returnMatchKey(item.row, includeOrder);
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(item);
-    }
-  }
-
-  const sortedRefunds = refunds.sort((a, b) => String(a.row.date).localeCompare(String(b.row.date)));
-
-  for (const refund of sortedRefunds) {
-    let absorbedForRefund = 0;
-
-    for (const includeOrder of [true, false]) {
-      if (!refund.remaining) break;
-      const map = includeOrder ? positivesByOrder : positivesByTitle;
-      const candidates = (map.get(returnMatchKey(refund.row, includeOrder)) || [])
-        .filter((item) => item.remaining > 0)
-        .sort((a, b) => String(b.row.date).localeCompare(String(a.row.date)));
-
-      for (const candidate of candidates) {
-        if (!refund.remaining) break;
-        const absorbed = Math.min(candidate.remaining, refund.remaining);
-        candidate.remaining -= absorbed;
-        refund.remaining -= absorbed;
-        stats.refundAmountAbsorbed += absorbed;
-        absorbedForRefund += absorbed;
-        stats.refundAmountAbsorbedBySource[refund.row.source] = (
-          stats.refundAmountAbsorbedBySource[refund.row.source] || 0
-        ) + absorbed;
-      }
-    }
-
-    if (absorbedForRefund) stats.refundsAbsorbed.push({ ...refund.row, amount: absorbedForRefund });
-    if (refund.remaining) stats.refundRowsUnmatched += 1;
-    else stats.refundRowsAbsorbed += 1;
-  }
-
-  const rows = positives
-    .filter((item) => item.remaining > 0)
-    .map((item) => ({
-      ...item.row,
-      amount: centsToAmount(item.remaining)
-    }));
-
-  return {
-    rows,
-    stats: {
-      ...stats,
-      refundAmountAbsorbed: stats.refundAmountAbsorbed / 100,
-      refundsAbsorbed: stats.refundsAbsorbed.map((item) => ({
-        ...item,
-        amount: item.amount / 100
-      })),
-      refundAmountAbsorbedBySource: Object.fromEntries(
-        Object.entries(stats.refundAmountAbsorbedBySource).map(([source, amount]) => [source, amount / 100])
-      )
-    }
-  };
-}
-
 function isServiceRow(row) {
   const title = String(row.title || '').trim();
+  if (String(row.category || '').trim() === 'Доставка') return true;
+  if (/^(доставк.*|компенсация доставки)$/i.test(title)) return true;
   if (row.source === 'wildberries') return /^(услуга доставки|комиссия сервиса)$/i.test(title);
   if (row.source === 'yandex') return /^(доставк.*|сервисный сбор|работа сервиса)$/i.test(title);
   return false;
@@ -814,6 +870,7 @@ function resetAnalyticsFilters() {
   els.analyticsYandex.checked = true;
   selectedPeriodKey = '';
   detailFilter = null;
+  detailOperation = 'all';
   resetDetailPaging();
   syncDateInputs();
   updateAnalytics();
@@ -823,7 +880,6 @@ function detailFilterName() {
   if (!detailFilter) return '';
   if (detailFilter.type === 'period') return `детали: ${detailFilter.key}`;
   if (detailFilter.type === 'source') return `детали: ${sourceLabels[detailFilter.source] || detailFilter.source}`;
-  if (detailFilter.type === 'refunds') return 'детали: возвраты';
   if (detailFilter.type === 'category' || detailFilter.type === 'categories') {
     return `детали: ${detailFilter.label || categoryName(detailFilter.category)}`;
   }
@@ -837,32 +893,66 @@ function renderActiveFilters(sources) {
     ? `${els.dateFrom.value || 'начало'} - ${els.dateTo.value || 'сегодня'}`
     : 'весь период';
   const sourceNames = selectedAnalyticsSourceNames(sources);
-  const parts = [
-    `Период: ${period}`,
-    `Источники: ${sourceNames.length ? sourceNames.join(', ') : 'нет'}`,
-    `Группировка: ${els.periodGroup.options[els.periodGroup.selectedIndex]?.textContent || els.periodGroup.value}`
-  ];
-  const detail = detailFilterName();
-  if (detail) parts.push(detail);
-  const search = els.detailSearch.value.trim();
-  if (search) parts.push(`поиск: ${search}`);
-
-  for (const part of parts) {
+  const addLabel = (text) => {
     const item = document.createElement('span');
-    item.textContent = part;
+    item.className = 'filter-token';
+    item.textContent = text;
     els.activeFilters.appendChild(item);
+  };
+  const addChip = (text, clear) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'filter-token filter-token-action';
+    chip.append(document.createTextNode(text));
+    const close = document.createElement('span');
+    close.className = 'filter-token-x';
+    close.textContent = '×';
+    chip.appendChild(close);
+    chip.addEventListener('click', clear);
+    els.activeFilters.appendChild(chip);
+  };
+
+  addLabel(`Период: ${period}`);
+  if (period !== 'весь период') addChip('сбросить период', () => applyQuickPeriod('all'));
+  addLabel(`Источники: ${sourceNames.length ? sourceNames.join(', ') : 'нет'}`);
+  if (sourceNames.length !== 3) {
+    addChip('все источники', () => {
+      els.analyticsOzon.checked = true;
+      els.analyticsWb.checked = true;
+      els.analyticsYandex.checked = true;
+      updateAnalytics();
+    });
+  }
+  addLabel(`Группировка: ${els.periodGroup.options[els.periodGroup.selectedIndex]?.textContent || els.periodGroup.value}`);
+  const detail = detailFilterName();
+  if (detail) {
+    addChip(detail, () => {
+      detailFilter = null;
+      resetDetailPaging();
+      updateAnalytics();
+    });
+  }
+  if (detailOperation !== 'all') addChip(`тип: ${operationLabel(detailOperation).toLowerCase()}`, () => setDetailOperation('all'));
+  const search = els.detailSearch.value.trim();
+  if (search) {
+    addChip(`поиск: ${search}`, () => {
+      els.detailSearch.value = '';
+      resetDetailPaging();
+      updateAnalytics();
+    });
   }
 
   const hasFilters = period !== 'весь период'
     || sourceNames.length !== 3
     || els.periodGroup.value !== 'month'
     || detailFilter
+    || detailOperation !== 'all'
     || search;
   if (hasFilters) {
     const reset = document.createElement('button');
     reset.type = 'button';
-    reset.className = 'secondary';
-    reset.textContent = 'Сбросить';
+    reset.className = 'filter-token filter-token-reset';
+    reset.textContent = 'Сбросить всё';
     reset.addEventListener('click', resetAnalyticsFilters);
     els.activeFilters.appendChild(reset);
   }
@@ -902,7 +992,6 @@ function applyQuickPeriod(period) {
   const year = today.getFullYear();
   const month = today.getMonth();
   selectedPeriodKey = '';
-  detailFilter = null;
   resetDetailPaging();
   if (els.quickPeriodSelect.value !== period) els.quickPeriodSelect.value = period || 'all';
 
@@ -994,15 +1083,20 @@ function updateDateInputBounds() {
 }
 
 function selectedRefundTotal(sources, range) {
-  return selectedRefundRows(sources, range).reduce((sum, refund) => sum + (Number(refund.amount) || 0), 0);
+  return selectedRefundRows(sources, range).reduce((sum, refund) => sum + Math.abs(rowAmount(refund)), 0);
 }
 
 function selectedRefundRows(sources, range) {
-  return absorbedRefunds.filter((refund) => {
+  return rows.filter((refund) => {
     if (!sources.has(refund.source)) return false;
+    if (!isRefundRow(refund)) return false;
     const date = parseRowDate(refund.date);
     return date && isDateInRange(date, range);
   });
+}
+
+function selectedPurchaseTotal(records) {
+  return records.reduce((sum, row) => (isRefundRow(row) ? sum : sum + rowAmount(row)), 0);
 }
 
 function totalForRange(sources, range) {
@@ -1012,6 +1106,14 @@ function totalForRange(sources, range) {
     if (!date || !isDateInRange(date, range)) return sum;
     return sum + (Number(row.amount) || 0);
   }, 0);
+}
+
+function recordsForRange(sources, range) {
+  return rows.filter((row) => {
+    if (!sources.has(row.source)) return false;
+    const date = parseRowDate(row.date);
+    return date && isDateInRange(date, range);
+  });
 }
 
 function previousRange(range) {
@@ -1053,15 +1155,17 @@ function buildAnalyticsData(sources, group) {
         expenses: 0,
         refunds: 0,
         rows: 0,
-        bySource: {}
+        bySource: {},
+        byCategory: {}
       });
     }
     const item = periods.get(key);
-    const amount = Number(row.amount) || 0;
+    const amount = rowAmount(row);
     records.push(row);
     total += amount;
     item.total += amount;
     item.bySource[row.source] = (item.bySource[row.source] || 0) + amount;
+    item.byCategory[row.category || 'unknown'] = (item.byCategory[row.category || 'unknown'] || 0) + amount;
     if (amount >= 0) item.expenses += amount;
     else item.refunds += Math.abs(amount);
     item.rows += 1;
@@ -1090,7 +1194,31 @@ function cssVar(name, fallback) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
 }
 
-function renderPeriodChart(periods) {
+function periodChartSegments(item, categoryOrder = new Map()) {
+  const mode = els.periodChartMode.value;
+  const values = mode === 'category' ? item.byCategory : item.bySource;
+  return Object.entries(values || {})
+    .filter(([, amount]) => amount > 0)
+    .sort((a, b) => {
+      if (mode !== 'category') return b[1] - a[1];
+      const left = categoryOrder.get(a[0]) ?? Number.MAX_SAFE_INTEGER;
+      const right = categoryOrder.get(b[0]) ?? Number.MAX_SAFE_INTEGER;
+      return left - right || b[1] - a[1];
+    })
+    .map(([key, amount]) => ({
+      key,
+      amount,
+      label: mode === 'category' ? categoryName(key) : (sourceLabels[key] || key),
+      color: mode === 'category' ? categoryColor(key) : (sourceColors[key] || '#2563eb')
+    }));
+}
+
+function periodChartSegmentTitle(item, segment) {
+  const share = item.total ? Math.round((segment.amount / item.total) * 100) : 0;
+  return `${item.key}: ${formatRub(item.total)}\n${segment.label}: ${share}% (${formatRub(segment.amount)})`;
+}
+
+function renderPeriodChart(periods, categoryOrder = new Map()) {
   const svg = els.periodChart;
   clearNode(svg);
 
@@ -1170,16 +1298,11 @@ function renderPeriodChart(periods) {
         activate();
       }
     };
-    const sourceEntries = Object.entries(item.bySource || {})
-      .filter(([, amount]) => amount > 0)
-      .sort(([a], [b]) => a.localeCompare(b));
-    const tooltipParts = sourceEntries.map(([source, amount]) => {
-      const share = item.total ? Math.round((amount / item.total) * 100) : 0;
-      return `${sourceLabels[source] || source} ${share}% (${formatRub(amount)})`;
-    });
+    const segments = periodChartSegments(item, categoryOrder);
+    const tooltipParts = segments.map((segment) => periodChartSegmentTitle(item, segment).split('\n')[1]);
     const title = `${item.key}: ${formatRub(item.total)}${tooltipParts.length ? `\n${tooltipParts.join('\n')}` : ''}`;
 
-    if (item.total <= 0 || !sourceEntries.length) {
+    if (item.total <= 0 || !segments.length) {
       const y = yFor(item.total);
       const rect = svgEl('rect', {
         ...barAttrs,
@@ -1198,7 +1321,8 @@ function renderPeriodChart(periods) {
       svg.appendChild(rect);
     } else {
       let stacked = 0;
-      for (const [source, amount] of sourceEntries) {
+      for (const segment of segments) {
+        const { amount } = segment;
         const yTop = yFor(stacked + amount);
         const yBottom = yFor(stacked);
         const rect = svgEl('rect', {
@@ -1208,13 +1332,13 @@ function renderPeriodChart(periods) {
           width: barWidth,
           height: Math.max(1, yBottom - yTop),
           rx: 3,
-          fill: sourceColors[source] || '#2563eb',
+          fill: segment.color,
           stroke: selectedPeriodKey === item.key ? borderStrongColor : 'none',
           'stroke-width': selectedPeriodKey === item.key ? 2 : 0
         });
         rect.addEventListener('click', activate);
         rect.addEventListener('keydown', onKeydown);
-        rect.appendChild(svgEl('title', {}, title));
+        rect.appendChild(svgEl('title', {}, periodChartSegmentTitle(item, segment)));
         svg.appendChild(rect);
         stacked += amount;
       }
@@ -1278,13 +1402,13 @@ function renderSourceBreakdown(records) {
   }
 }
 
-function buildCategoryBreakdown(records) {
+function buildCategoryBreakdown(records, previousRecords = []) {
   const totals = new Map();
-  let total = 0;
+  const previousTotals = new Map();
 
   for (const row of records) {
     const amount = Number(row.amount) || 0;
-    if (amount <= 0) continue;
+    if (!amount) continue;
     const category = row.category || 'unknown';
     const current = totals.get(category) || {
       category,
@@ -1292,20 +1416,39 @@ function buildCategoryBreakdown(records) {
       count: 0
     };
     current.amount += amount;
-    current.count += 1;
+    if (amount > 0) current.count += 1;
     totals.set(category, current);
-    total += amount;
   }
 
+  for (const row of previousRecords) {
+    const amount = Number(row.amount) || 0;
+    if (!amount) continue;
+    const category = row.category || 'unknown';
+    previousTotals.set(category, (previousTotals.get(category) || 0) + amount);
+  }
+
+  const entries = [...totals.values()]
+    .filter((item) => item.amount > 0)
+    .map((item) => ({ ...item, previousAmount: Math.max(0, previousTotals.get(item.category) || 0) }))
+    .sort((a, b) => b.amount - a.amount);
+
   return {
-    total,
-    entries: [...totals.values()].sort((a, b) => b.amount - a.amount)
+    total: entries.reduce((sum, item) => sum + item.amount, 0),
+    entries
   };
+}
+
+function categoryCompareText(item) {
+  if (!item.previousAmount) return item.amount ? 'новые траты' : '';
+  const percent = Math.round(((item.amount - item.previousAmount) / Math.abs(item.previousAmount)) * 100);
+  if (!percent) return 'как раньше';
+  return `${percent > 0 ? '+' : ''}${percent}% к прошлому периоду`;
 }
 
 function categoryMetaText(item, total) {
   const percent = total ? Math.round((item.amount / total) * 100) : 0;
-  return `${formatRub(item.amount)} · ${percent}% · ${formatCount(item.count, ['покупка', 'покупки', 'покупок'])}`;
+  const compare = categoryCompareText(item);
+  return `${formatRub(item.amount)} · ${percent}% · ${formatCount(item.count, ['покупка', 'покупки', 'покупок'])}${compare ? ` · ${compare}` : ''}`;
 }
 
 function scrollDetailsIntoView() {
@@ -1319,6 +1462,19 @@ function setDetailFilter(filter, scroll = false) {
   resetDetailPaging();
   updateAnalytics();
   if (scroll) scrollDetailsIntoView();
+}
+
+function setDetailOperation(operation, scroll = false) {
+  detailOperation = operation || 'all';
+  resetDetailPaging();
+  updateAnalytics();
+  if (scroll) scrollDetailsIntoView();
+}
+
+function showKpiDetails(operation) {
+  detailFilter = null;
+  els.detailSearch.value = '';
+  setDetailOperation(operation, true);
 }
 
 function categoryDrillFilter(item) {
@@ -1467,9 +1623,9 @@ function renderCategoryTiles(entries, total) {
   els.categoryBreakdown.appendChild(grid);
 }
 
-function renderCategoryBreakdown(records) {
+function renderCategoryBreakdown(records, previousRecords = []) {
   clearNode(els.categoryBreakdown);
-  const { entries, total } = buildCategoryBreakdown(records);
+  const { entries, total } = buildCategoryBreakdown(records, previousRecords);
 
   els.categorySummary.textContent = entries.length ? formatCount(entries.length, ['категория', 'категории', 'категорий']) : '';
 
@@ -1489,7 +1645,8 @@ function renderCategoryBreakdown(records) {
       label: 'Остальное',
       categories: tail.map((item) => item.category),
       amount: tail.reduce((sum, item) => sum + item.amount, 0),
-      count: tail.reduce((sum, item) => sum + item.count, 0)
+      count: tail.reduce((sum, item) => sum + item.count, 0),
+      previousAmount: tail.reduce((sum, item) => sum + (item.previousAmount || 0), 0)
     });
   }
 
@@ -1513,30 +1670,193 @@ function renderCategoryBreakdown(records) {
   }
 }
 
+function categoryOptions(records = rows) {
+  const names = new Set(Object.keys(categoryColors).filter((category) => category !== 'other'));
+  for (const row of records) names.add(row.category || 'unknown');
+  return [...names].sort((a, b) => categoryName(a).localeCompare(categoryName(b), 'ru'));
+}
+
+function renderBudgetCategoryOptions(records) {
+  const current = els.budgetCategory.value;
+  clearNode(els.budgetCategory);
+  for (const category of categoryOptions(records)) {
+    const option = document.createElement('option');
+    option.value = category;
+    option.textContent = categoryName(category);
+    els.budgetCategory.appendChild(option);
+  }
+  if (current && [...els.budgetCategory.options].some((option) => option.value === current)) {
+    els.budgetCategory.value = current;
+  }
+}
+
+function categorySpend(records) {
+  const totals = new Map();
+  for (const row of records) {
+    const amount = rowAmount(row);
+    if (!amount) continue;
+    const category = row.category || 'unknown';
+    totals.set(category, (totals.get(category) || 0) + amount);
+  }
+  return totals;
+}
+
+function budgetEntries(records) {
+  const spent = categorySpend(records);
+  return Object.entries(budgets)
+    .map(([category, limit]) => ({
+      category,
+      limit,
+      spent: Math.max(0, spent.get(category) || 0)
+    }))
+    .sort((a, b) => (b.spent / b.limit) - (a.spent / a.limit));
+}
+
+function budgetAlertLines(records) {
+  return budgetEntries(records)
+    .filter((item) => item.limit > 0 && item.spent >= item.limit * 0.9)
+    .slice(0, 3)
+    .map((item) => {
+      const diff = item.spent - item.limit;
+      return diff > 0
+        ? `${categoryName(item.category)}: выше бюджета на ${formatRub(diff)}`
+        : `${categoryName(item.category)}: осталось ${formatRub(-diff)}`;
+    });
+}
+
+function renderBudgets(records) {
+  renderBudgetCategoryOptions(records);
+  clearNode(els.budgetBreakdown);
+  const entries = budgetEntries(records);
+  if (!entries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'Добавьте лимит по категории';
+    els.budgetBreakdown.appendChild(empty);
+    return;
+  }
+
+  for (const item of entries) {
+    const row = document.createElement('div');
+    row.className = item.spent > item.limit ? 'budget-row over' : 'budget-row';
+    row.style.setProperty('--category-color', categoryColor(item.category));
+
+    const head = document.createElement('div');
+    head.className = 'budget-head';
+    const title = document.createElement('strong');
+    title.textContent = categoryName(item.category);
+    const amount = document.createElement('span');
+    amount.textContent = `${formatRub(item.spent)} / ${formatRub(item.limit)}`;
+    head.append(title, amount);
+
+    const bar = document.createElement('div');
+    bar.className = 'budget-bar';
+    const fill = document.createElement('div');
+    fill.className = 'budget-fill';
+    fill.style.width = `${Math.min(100, Math.max(2, (item.spent / item.limit) * 100))}%`;
+    bar.appendChild(fill);
+
+    const actions = document.createElement('div');
+    actions.className = 'budget-actions';
+    const status = document.createElement('span');
+    status.textContent = item.spent > item.limit
+      ? `перерасход ${formatRub(item.spent - item.limit)}`
+      : `осталось ${formatRub(item.limit - item.spent)}`;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'secondary';
+    remove.textContent = 'Удалить';
+    remove.addEventListener('click', () => {
+      delete budgets[item.category];
+      storeBudgets();
+      updateAnalytics();
+    });
+    actions.append(status, remove);
+    row.append(head, bar, actions);
+    els.budgetBreakdown.appendChild(row);
+  }
+}
+
+function saveBudget() {
+  const category = els.budgetCategory.value;
+  const amount = Number(els.budgetAmount.value);
+  if (!category) return;
+  if (Number.isFinite(amount) && amount > 0) budgets[category] = amount;
+  else delete budgets[category];
+  els.budgetAmount.value = '';
+  storeBudgets();
+  updateAnalytics();
+}
+
+function renderSpendReport(records, periods, sources, range, previousTotal, refunds) {
+  const purchases = records.filter((row) => rowAmount(row) > 0 && !isRefundRow(row));
+  if (!records.length) {
+    currentReportText = 'Нет операций для выбранной выборки.';
+    els.spendReport.textContent = currentReportText;
+    els.copyReport.disabled = true;
+    return;
+  }
+
+  const total = records.reduce((sum, row) => sum + rowAmount(row), 0);
+  const categories = buildCategoryBreakdown(records).entries;
+  const topCategory = categories[0];
+  const topItem = buildTopItems(records)[0];
+  const sourceTotals = [...sources]
+    .map((source) => ({
+      source,
+      total: records
+        .filter((row) => row.source === source)
+        .reduce((sum, row) => sum + rowAmount(row), 0)
+    }))
+    .filter((item) => item.total > 0)
+    .sort((a, b) => b.total - a.total);
+
+  const lines = [
+    `Итого: ${formatRub(total)} за ${formatCount(records.length, ['операцию', 'операции', 'операций'])}.`
+  ];
+  const comparison = previousTotal !== null && previousTotal !== undefined ? compareText(total, previousTotal) : '';
+  if (comparison) lines.push(`К прошлому периоду: ${comparison}.`);
+  if (topCategory) lines.push(`Главная категория: ${categoryName(topCategory.category)} — ${formatRub(topCategory.amount)}.`);
+  if (sourceTotals[0]) lines.push(`Главный источник: ${sourceLabels[sourceTotals[0].source]} — ${formatRub(sourceTotals[0].total)}.`);
+  if (topItem) lines.push(`Крупнейшая трата: ${topItem.title} — ${formatRub(topItem.amount)}.`);
+  if (refunds) lines.push(`Возвраты уменьшили расходы на ${formatRub(refunds)}.`);
+  for (const alert of budgetAlertLines(records)) lines.push(`Бюджет: ${alert}.`);
+  if (!purchases.length) lines.push('В выборке только возвраты или корректировки.');
+
+  currentReportText = lines.join('\n');
+  els.spendReport.textContent = currentReportText;
+  els.copyReport.disabled = false;
+}
+
 function buildTopItems(records) {
   const totals = new Map();
   for (const row of records) {
     const amount = Number(row.amount) || 0;
     const title = String(row.title || '').trim();
-    if (amount <= 0 || !title) continue;
-    const key = `${row.source}\u0001${title}`;
+    if (!amount || !title) continue;
+    const key = `${row.source}\u0001${normalizeKeyText(title)}`;
     const current = totals.get(key) || {
       title,
       source: row.source,
       category: row.category || 'unknown',
       amount: 0,
       count: 0,
+      refunds: 0,
       firstDate: row.date,
       lastDate: row.date
     };
     current.amount += amount;
-    current.count += 1;
+    if (amount > 0) current.count += 1;
+    else current.refunds += 1;
     if (String(row.date).localeCompare(String(current.firstDate)) < 0) current.firstDate = row.date;
     if (String(row.date).localeCompare(String(current.lastDate)) > 0) current.lastDate = row.date;
     totals.set(key, current);
   }
 
-  return [...totals.values()].sort((a, b) => b.amount - a.amount).slice(0, 8);
+  return [...totals.values()]
+    .filter((item) => item.amount > 0)
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 8);
 }
 
 function shortDate(value) {
@@ -1547,8 +1867,10 @@ function topItemMeta(item) {
   const dates = shortDate(item.firstDate) === shortDate(item.lastDate)
     ? shortDate(item.firstDate)
     : `${shortDate(item.firstDate)} - ${shortDate(item.lastDate)}`;
-  const repeats = item.count > 1 ? `, ${formatCount(item.count, ['покупка', 'покупки', 'покупок'])}` : '';
-  return `${sourceLabels[item.source] || item.source}, ${dates}${repeats}`;
+  const parts = [];
+  if (item.count > 1) parts.push(formatCount(item.count, ['покупка', 'покупки', 'покупок']));
+  if (item.refunds) parts.push(formatCount(item.refunds, ['возврат', 'возврата', 'возвратов']));
+  return `${sourceLabels[item.source] || item.source}, ${dates}${parts.length ? `, ${parts.join(', ')}` : ''}`;
 }
 
 function renderTopItems(records) {
@@ -1598,7 +1920,6 @@ function renderTopItems(records) {
 
 function matchesDetailFilter(row, group) {
   if (!detailFilter) return true;
-  if (detailFilter.type === 'refunds') return true;
   if (detailFilter.type === 'source') return row.source === detailFilter.source;
   if (detailFilter.type === 'category') return row.category === detailFilter.category;
   if (detailFilter.type === 'categories') return detailFilter.categories.includes(row.category);
@@ -1613,6 +1934,38 @@ function matchesDetailFilter(row, group) {
   return true;
 }
 
+function matchesOperation(row) {
+  if (detailOperation === 'refund') return isRefundRow(row);
+  if (detailOperation === 'purchase') return !isRefundRow(row);
+  return true;
+}
+
+function operationLabel(operation) {
+  if (operation === 'refund') return 'Возвраты';
+  if (operation === 'purchase') return 'Покупки';
+  return 'Все';
+}
+
+function detailCountForms() {
+  if (detailOperation === 'refund') return ['возврат', 'возврата', 'возвратов'];
+  if (detailOperation === 'purchase') return ['покупка', 'покупки', 'покупок'];
+  return ['операция', 'операции', 'операций'];
+}
+
+function detailTitleText() {
+  const base = detailOperation === 'refund'
+    ? 'Детали возвратов'
+    : (detailOperation === 'purchase' ? 'Детали покупок' : 'Детали операций');
+  const detail = detailFilterName().replace(/^детали: /, '');
+  return detail ? `${base}: ${detail}` : base;
+}
+
+function syncDetailOperationButtons() {
+  for (const button of els.detailOperationButtons) {
+    button.classList.toggle('active', button.dataset.operation === detailOperation);
+  }
+}
+
 function detailPageSize() {
   return els.detailPageSize.value === 'all' ? Infinity : (Number(els.detailPageSize.value) || 60);
 }
@@ -1621,43 +1974,79 @@ function resetDetailPaging() {
   detailShownCount = detailPageSize();
 }
 
+function detailSortValue(row, field) {
+  if (field === 'amount') return rowAmount(row);
+  if (field === 'source') return sourceLabels[row.source] || row.source || '';
+  if (field === 'type') return isRefundRow(row) ? 'Возврат' : 'Покупка';
+  if (field === 'category') return categoryName(row.category);
+  if (field === 'title') return row.title || '';
+  return row.date || '';
+}
+
+function compareDetailRows(a, b) {
+  const left = detailSortValue(a, detailSort.field);
+  const right = detailSortValue(b, detailSort.field);
+  const direction = detailSort.direction === 'asc' ? 1 : -1;
+  if (typeof left === 'number' || typeof right === 'number') {
+    return ((Number(left) || 0) - (Number(right) || 0)) * direction;
+  }
+  return String(left).localeCompare(String(right), 'ru') * direction;
+}
+
+function setDetailSort(field) {
+  detailSort = {
+    field,
+    direction: detailSort.field === field && detailSort.direction === 'desc' ? 'asc' : 'desc'
+  };
+  resetDetailPaging();
+  updateAnalytics();
+}
+
 function renderDetails(records, group) {
   clearNode(els.detailRows);
   const query = normalizeKeyText(els.detailSearch.value);
-  const isRefundDetails = detailFilter?.type === 'refunds';
-  const detailRecords = isRefundDetails
-    ? selectedRefundRows(selectedAnalyticsSources(), selectedDateRange())
-    : records;
-  const filtered = detailRecords
+  syncDetailOperationButtons();
+  const filtered = records
+    .filter(matchesOperation)
     .filter((row) => matchesDetailFilter(row, group))
     .filter((row) => !query || normalizeKeyText(row.title).includes(query))
-    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    .sort(compareDetailRows);
   const limit = Math.min(detailShownCount, filtered.length);
   const shown = filtered.slice(0, limit);
 
-  els.detailTitle.textContent = detailFilter ? detailFilterName().replace(/^детали: /, 'Детали: ') : 'Детали покупок';
+  els.detailTitle.textContent = detailTitleText();
   els.detailSummary.textContent = filtered.length
-    ? `${formatCount(filtered.length, isRefundDetails ? ['возврат', 'возврата', 'возвратов'] : ['покупка', 'покупки', 'покупок'])}${filtered.length > shown.length ? ` · показано ${shown.length}` : ''}`
+    ? `${formatCount(filtered.length, detailCountForms())}${filtered.length > shown.length ? ` · показано ${shown.length}` : ''}`
     : '';
-  els.clearDetailFilter.hidden = !detailFilter && !query;
+  els.clearDetailFilter.hidden = !detailFilter && !query && detailOperation === 'all';
   els.detailMore.hidden = filtered.length <= shown.length;
   els.detailMore.textContent = `Показать ещё ${Math.min(detailPageSize(), filtered.length - shown.length)}`;
 
   if (!filtered.length) {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
-    empty.textContent = isRefundDetails
-      ? 'Нет возвратов в выборке'
-      : (records.length ? 'Нет покупок для выбранной детализации' : 'Нет покупок в выборке');
+    empty.textContent = records.length ? 'Нет операций для выбранной детализации' : 'Нет операций в выборке';
     els.detailRows.appendChild(empty);
     return;
   }
 
   const header = document.createElement('div');
   header.className = 'detail-row header';
-  for (const text of ['Дата', 'Источник', 'Товар', 'Категория', 'Сумма']) {
+  for (const [field, text] of [
+    ['date', 'Дата'],
+    ['source', 'Источник'],
+    ['type', 'Тип'],
+    ['title', 'Товар'],
+    ['category', 'Категория'],
+    ['amount', 'Сумма']
+  ]) {
     const cell = document.createElement('span');
-    cell.textContent = text;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = detailSort.field === field ? 'detail-sort active' : 'detail-sort';
+    button.textContent = `${text}${detailSort.field === field ? (detailSort.direction === 'asc' ? ' ↑' : ' ↓') : ''}`;
+    button.addEventListener('click', () => setDetailSort(field));
+    cell.appendChild(button);
     header.appendChild(cell);
   }
   els.detailRows.appendChild(header);
@@ -1671,7 +2060,13 @@ function renderDetails(records, group) {
 
     const source = document.createElement('span');
     source.className = 'source-label';
-    source.append(createSourceBadge(row.source), document.createTextNode(sourceLabels[row.source] || row.source));
+    source.title = sourceLabels[row.source] || row.source;
+    source.setAttribute('aria-label', source.title);
+    source.append(createSourceBadge(row.source));
+
+    const operation = document.createElement('span');
+    operation.className = `operation-pill ${isRefundRow(row) ? 'refund' : 'purchase'}`;
+    operation.textContent = isRefundRow(row) ? 'Возврат' : 'Покупка';
 
     const title = document.createElement('span');
     title.className = 'detail-title';
@@ -1684,10 +2079,10 @@ function renderDetails(records, group) {
     category.textContent = categoryName(row.category);
 
     const amount = document.createElement('span');
-    amount.className = 'detail-amount';
-    amount.textContent = formatRub(isRefundDetails ? -Math.abs(Number(row.amount) || 0) : (Number(row.amount) || 0));
+    amount.className = `detail-amount ${isRefundRow(row) ? 'refund' : ''}`;
+    amount.textContent = formatRub(rowAmount(row));
 
-    item.append(date, source, title, category, amount);
+    item.append(date, source, operation, title, category, amount);
     els.detailRows.appendChild(item);
   }
 }
@@ -1698,44 +2093,55 @@ function updateAnalytics() {
   const group = els.periodGroup.value;
   const { records, periods, total, range } = buildAnalyticsData(sources, group);
   const refunds = selectedRefundTotal(sources, range);
-  const averageLabel = periodUnitLabels[group] || periodUnitLabels.month;
+  const purchases = selectedPurchaseTotal(records);
+  const prevRange = previousRange(range);
+  const prevTotal = prevRange ? totalForRange(sources, prevRange) : 0;
+  const previousRecords = prevRange ? recordsForRange(sources, prevRange) : [];
+
+  document.body.classList.toggle('has-visible-data', records.length > 0);
 
   renderActiveFilters(sources);
   els.analyticsEmpty.textContent = hasCollected
-    ? (sources.size ? 'За выбранный период покупок нет.' : 'В фильтре отчёта выключены все источники.')
+    ? (sources.size ? 'За выбранный период операций нет.' : 'В фильтре отчёта выключены все источники.')
     : 'Выберите маркетплейсы сверху и нажмите «Собрать данные». В этом профиле браузера нужно быть залогиненным в выбранные магазины.';
 
   els.analyticsTotal.textContent = formatRub(total);
-  const prevRange = previousRange(range);
-  const prevTotal = prevRange ? totalForRange(sources, prevRange) : 0;
   const comparison = prevRange ? compareText(total, prevTotal) : '';
   els.analyticsTotalCompare.textContent = comparison;
   els.analyticsTotalCompare.className = comparison.startsWith('+')
     ? 'up'
     : (comparison.startsWith('-') ? 'down' : '');
-  els.analyticsAverage.textContent = formatRub(periods.length ? total / periods.length : 0);
-  els.analyticsAverageLabel.textContent = averageLabel;
+  els.analyticsAverage.textContent = formatRub(purchases);
+  els.analyticsAverageLabel.textContent = 'покупки';
   els.analyticsPurchases.textContent = String(records.length);
-  els.analyticsPurchasesLabel.textContent = pluralRu(records.length, ['покупка', 'покупки', 'покупок']);
+  els.analyticsPurchasesLabel.textContent = pluralRu(records.length, ['операция', 'операции', 'операций']);
   els.analyticsRefunds.textContent = formatRub(refunds);
   els.chartRange.textContent = periods.length ? `${periods[0].key} - ${periods[periods.length - 1].key}` : '';
 
-  renderPeriodChart(periods);
+  const categoryOrder = new Map(buildCategoryBreakdown(records).entries.map((item, index) => [item.category, index]));
+  renderPeriodChart(periods, categoryOrder);
   renderSourceBreakdown(records);
-  renderCategoryBreakdown(records);
+  renderCategoryBreakdown(records, previousRecords);
+  renderSpendReport(records, periods, sources, range, prevRange ? prevTotal : null, refunds);
+  renderBudgets(records);
   renderTopItems(records);
   renderDetails(records, group);
 }
 
 function updateResult(records, stats = {}) {
   const serviceRowsDropped = records.filter(isServiceRow).length;
-  const cleaned = absorbReturns(records.filter((row) => !isServiceRow(row)));
+  const preparedRows = records
+    .filter((row) => !isServiceRow(row))
+    .map((row) => withCategory(withOperation(row)));
+  const deduped = dedupeRows(preparedRows);
+  const refundRows = deduped.rows.filter(isRefundRow);
   const cleaningStats = {
-    ...cleaned.stats,
-    serviceRowsDropped
+    refundRows: refundRows.length,
+    refundAmount: refundRows.reduce((sum, row) => sum + Math.abs(rowAmount(row)), 0),
+    serviceRowsDropped,
+    duplicateRowsDropped: deduped.duplicates
   };
-  absorbedRefunds = (cleaningStats.refundsAbsorbed || []).map(withCategory);
-  rows = cleaned.rows.map(withCategory).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  rows = deduped.rows.sort((a, b) => String(a.date).localeCompare(String(b.date)));
   document.body.classList.toggle('has-data', rows.length > 0);
   csvText = makeCsv(rows);
   updateCsvButton();
@@ -1769,19 +2175,24 @@ async function copyLog() {
 }
 
 async function uploadCsv() {
-  const file = els.uploadCsvInput.files?.[0];
-  if (!file) return;
+  const files = [...(els.uploadCsvInput.files || [])];
+  if (!files.length) return;
 
   els.uploadCsv.disabled = true;
   showWarnings();
 
   try {
-    const importedRows = globalThis.parseSpendCsv(await file.text());
+    const importedRows = [];
+    for (const file of files) {
+      const parsed = globalThis.parseSpendCsv(await file.text());
+      importedRows.push(...parsed);
+    }
     if (!importedRows.length) throw new Error('в CSV нет строк');
 
     hasCollected = true;
     selectedPeriodKey = '';
     detailFilter = null;
+    detailOperation = 'all';
     resetDetailPaging();
     lastRunAt = null;
     lastRunKind = '';
@@ -1790,10 +2201,14 @@ async function uploadCsv() {
     collectStatuses = {};
     renderSourceStatuses();
     const cleaningStats = updateResult(importedRows, {});
-    renderQualitySummary(importedRows, {}, cleaningStats, []);
-    finishRun('Загружено');
-    setStatus(`Загружено: ${rows.length} строк из ${file.name}.`, 1, 1);
-    appendLog(`Загружен CSV: ${file.name}, строк ${rows.length}.`);
+    const warnings = cleaningStats.duplicateRowsDropped ? [`Удалено дублей при объединении: ${cleaningStats.duplicateRowsDropped}`] : [];
+    renderQualitySummary(importedRows, {}, {
+      ...cleaningStats
+    }, warnings);
+    finishRun(files.length > 1 ? 'Объединено' : 'Загружено', warnings.length);
+    setStatus(`${files.length > 1 ? 'Объединено' : 'Загружено'}: ${rows.length} строк из ${files.length} CSV.`, 1, 1);
+    appendLog(`CSV импорт: файлов ${files.length}, строк ${rows.length}, дублей ${cleaningStats.duplicateRowsDropped}.`);
+    for (const warning of warnings) appendLog(`Предупреждение: ${warning}`);
   } catch (error) {
     setStatus(`Ошибка загрузки CSV: ${error.message}`);
     showWarnings([error.message]);
@@ -1806,6 +2221,15 @@ async function uploadCsv() {
 
 async function collect() {
   const sources = selectedCollectSources();
+  const baseRows = rows.slice();
+  const baseRun = {
+    at: lastRunAt,
+    kind: lastRunKind,
+    warningCount: lastWarningCount,
+    detailsOpen: runDetailsOpen
+  };
+  const knownReceipts = collectKnownReceipts(baseRows);
+  const isUpdateRun = hasKnownReceipts(knownReceipts);
 
   if (sources.length === 0) {
     setStatus('Выберите хотя бы один источник.');
@@ -1826,6 +2250,7 @@ async function collect() {
   hasCollected = false;
   selectedPeriodKey = '';
   detailFilter = null;
+  detailOperation = 'all';
   resetDetailPaging();
   lastRunAt = null;
   lastRunKind = '';
@@ -1836,13 +2261,16 @@ async function collect() {
   setCollectStatuses(sources, 'waiting', 'ожидает');
   logLineByKey.clear();
   setStatus('Начинаю сбор...', 0, sources.length);
-  appendLog(`Старт: ${sources.join(', ')}.`);
+  appendLog(`${isUpdateRun ? 'Обновление' : 'Старт'}: ${sources.join(', ')}.`);
 
   try {
     const started = await callChrome(api.runtime.sendMessage, {
       type: 'SPEND_COLLECT_START',
       sources,
-      options: defaultCollectOptions
+      options: {
+        ...defaultCollectOptions,
+        knownReceipts
+      }
     });
     if (!started?.ok || !started.jobId) throw new Error(started?.error || 'Не удалось запустить сбор.');
 
@@ -1851,18 +2279,28 @@ async function collect() {
 
     hasCollected = true;
     const warnings = response.warnings || [];
-    const cleaningStats = updateResult(response.rows || [], response.stats || {});
-    renderQualitySummary(response.rows || [], response.stats || {}, cleaningStats, warnings);
+    const collectedRows = response.rows || [];
+    const resultRows = isUpdateRun ? [...baseRows, ...collectedRows] : collectedRows;
+    const cleaningStats = updateResult(resultRows, response.stats || {});
+    renderQualitySummary(resultRows, response.stats || {}, cleaningStats, warnings);
     showWarnings(warnings);
     for (const warning of warnings) appendLog(`Предупреждение: ${warning}`);
     for (const source of sources) {
       if (collectStatuses[source]?.state !== 'error') setCollectStatus(source, 'done', 'готово');
     }
-    finishRun('Собрано', warnings.length);
+    finishRun(isUpdateRun ? 'Обновлено' : 'Собрано', warnings.length);
     const downloadStatus = rows.length ? 'CSV готов к скачиванию' : 'строк для CSV нет';
     setStatus(`Готово: ${rows.length} строк, ${downloadStatus}.`, 1, 1);
-    appendLog(`Готово: ${rows.length} строк, ${downloadStatus}.`);
+    appendLog(`Готово: ${rows.length} строк, получено строк ${collectedRows.length}, ${downloadStatus}.`);
   } catch (error) {
+    if (baseRows.length) {
+      updateResult(baseRows, {});
+      lastRunAt = baseRun.at;
+      lastRunKind = baseRun.kind;
+      lastWarningCount = baseRun.warningCount;
+      runDetailsOpen = baseRun.detailsOpen;
+      renderRunSummary();
+    }
     setStatus(`Ошибка: ${error.message}`);
     showWarnings([error.message]);
     for (const source of Object.keys(collectStatuses)) {
@@ -1895,8 +2333,14 @@ els.uploadCsvInput.addEventListener('change', () => {
 });
 els.downloadCsv.addEventListener('click', downloadCsv);
 els.runDownloadCsv.addEventListener('click', downloadCsv);
-els.analyticsRefunds.parentElement.title = 'Показать учтённые возвраты';
-makeClickable(els.analyticsRefunds.parentElement, () => setDetailFilter({ type: 'refunds' }, true));
+els.analyticsTotal.parentElement.title = 'Показать все операции';
+makeClickable(els.analyticsTotal.parentElement, () => showKpiDetails('all'));
+els.analyticsAverage.parentElement.title = 'Показать покупки';
+makeClickable(els.analyticsAverage.parentElement, () => showKpiDetails('purchase'));
+els.analyticsRefunds.parentElement.title = 'Показать возвраты';
+makeClickable(els.analyticsRefunds.parentElement, () => showKpiDetails('refund'));
+els.analyticsPurchases.parentElement.title = 'Показать все операции';
+makeClickable(els.analyticsPurchases.parentElement, () => showKpiDetails('all'));
 els.toggleRunDetails.addEventListener('click', () => {
   runDetailsOpen = !runDetailsOpen;
   renderRunSummary();
@@ -1911,6 +2355,17 @@ makeClickable(els.warningBanner, () => {
 });
 els.copyLog.addEventListener('click', () => {
   copyLog().catch((error) => appendLog(`Ошибка копирования лога: ${error.message}`));
+});
+els.copyReport.addEventListener('click', () => {
+  navigator.clipboard.writeText(currentReportText)
+    .then(() => {
+      const oldText = els.copyReport.textContent;
+      els.copyReport.textContent = 'Скопировано';
+      setTimeout(() => {
+        els.copyReport.textContent = oldText;
+      }, 1200);
+    })
+    .catch((error) => appendLog(`Ошибка копирования отчёта: ${error.message}`));
 });
 els.themeToggle.addEventListener('click', () => {
   applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
@@ -1931,20 +2386,18 @@ els.quickPeriodSelect.addEventListener('change', () => {
 });
 els.periodGroup.addEventListener('change', () => {
   selectedPeriodKey = '';
-  detailFilter = null;
+  if (detailFilter?.type === 'period') detailFilter = null;
   resetDetailPaging();
   updateAnalytics();
 });
 els.dateFrom.addEventListener('change', () => {
   selectedPeriodKey = '';
-  detailFilter = null;
   els.quickPeriodSelect.value = 'custom';
   resetDetailPaging();
   updateAnalytics();
 });
 els.dateTo.addEventListener('change', () => {
   selectedPeriodKey = '';
-  detailFilter = null;
   els.quickPeriodSelect.value = 'custom';
   resetDetailPaging();
   updateAnalytics();
@@ -1952,7 +2405,6 @@ els.dateTo.addEventListener('change', () => {
 els.resetPeriod.addEventListener('click', () => applyQuickPeriod('all'));
 for (const input of [els.analyticsOzon, els.analyticsWb, els.analyticsYandex]) {
   input.addEventListener('change', () => {
-    detailFilter = null;
     resetDetailPaging();
     updateAnalytics();
   });
@@ -1964,12 +2416,20 @@ els.categoryChartType.addEventListener('change', () => {
   localStorage.setItem(categoryChartTypeStorageKey, els.categoryChartType.value);
   updateAnalytics();
 });
+els.periodChartMode.addEventListener('change', () => {
+  localStorage.setItem(periodChartModeStorageKey, els.periodChartMode.value);
+  updateAnalytics();
+});
 els.clearDetailFilter.addEventListener('click', () => {
   detailFilter = null;
+  detailOperation = 'all';
   els.detailSearch.value = '';
   resetDetailPaging();
   updateAnalytics();
 });
+for (const button of els.detailOperationButtons) {
+  button.addEventListener('click', () => setDetailOperation(button.dataset.operation || 'all'));
+}
 els.detailSearch.addEventListener('input', () => {
   resetDetailPaging();
   updateAnalytics();
@@ -1982,6 +2442,10 @@ els.detailMore.addEventListener('click', () => {
   detailShownCount += detailPageSize();
   updateAnalytics();
 });
+els.saveBudget.addEventListener('click', saveBudget);
+els.budgetAmount.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') saveBudget();
+});
 els.clearLog.addEventListener('click', () => {
   logLines = [];
   logLineByKey.clear();
@@ -1989,9 +2453,10 @@ els.clearLog.addEventListener('click', () => {
 });
 
 els.categoryChartType.value = loadCategoryChartType();
+els.periodChartMode.value = loadPeriodChartMode();
 applyTheme(loadTheme());
 updateProgressFill();
 renderLog();
-updateAnalytics();
+if (!restoreLastRun()) updateAnalytics();
 checkForUpdate();
 loadCategoryRulePack();

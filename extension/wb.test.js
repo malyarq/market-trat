@@ -22,4 +22,4 @@ const items = parseWbReceiptItems(`
   <div class="total"></div>
 `);
 
-assert.deepEqual(items, [{ title: 'Футболка оверсайз', amount: 1299 }]);
+assert.deepEqual(items, [{ title: 'Футболка оверсайз', amount: 1299, itemIndex: 1 }]);

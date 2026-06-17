@@ -284,7 +284,7 @@ function parseWbReceiptItems(html) {
     const amount = amountFromText(stripTags(costBlock));
 
     if (title && amount && !isWbServiceItemTitle(title)) {
-      items.push({ title, amount });
+      items.push({ title, amount, itemIndex: items.length + 1 });
     }
   }
 
@@ -345,6 +345,7 @@ async function recordsFromWbReceipt(receipt) {
       type,
       is_return: isReturn ? '1' : '0',
       marketplace_id: receipt.receiptUid || '',
+      item_index: '1',
       receipt_url: receiptUrl,
       raw_title: `operationTypeId=${receipt.operationTypeId || ''}`,
       raw_amount: String(receipt.operationSum ?? '')
@@ -362,6 +363,7 @@ async function recordsFromWbReceipt(receipt) {
     type,
     is_return: isReturn ? '1' : '0',
     marketplace_id: receipt.receiptUid || '',
+    item_index: String(item.itemIndex || ''),
     receipt_url: receiptUrl,
     raw_title: `operationTypeId=${receipt.operationTypeId || ''}`,
     raw_amount: String(item.amount)
@@ -657,6 +659,7 @@ function parseYandexReceiptItems(html) {
     items.push({
       title,
       amount,
+      itemIndex: items.length + 1,
       settlementKind: yandexSettlementKind(cells[1])
     });
   }
@@ -703,6 +706,7 @@ function rowsFromYandexReceiptHtml(receipt, html) {
     type: isReturn ? 'refund' : 'purchase',
     is_return: isReturn ? '1' : '0',
     marketplace_id: `${receipt.orderId || ''}:${receipt.id || yandexReceiptId(receipt.fiscalUrl)}`,
+    item_index: String(item.itemIndex || ''),
     receipt_url: receipt.fiscalUrl || '',
     raw_title: `orderId=${receipt.orderId || ''} receiptType=${receipt.type || ''}`,
     raw_amount: String(item.amount),
@@ -812,6 +816,8 @@ async function collectSpend({ sources, options }) {
   const warnings = [];
   const stats = {};
   const jobs = [];
+  const knownReceipts = options.knownReceipts || {};
+  const knownReceiptTail = options.knownReceiptTail;
 
   if (sources.includes('ozon')) {
     jobs.push(trackSourceProgress('ozon', async () => {
@@ -820,7 +826,9 @@ async function collectSpend({ sources, options }) {
         maxPages: options.ozonMaxPages,
         parsePdf: options.ozonParsePdf !== false,
         pdfConcurrency: options.ozonPdfConcurrency,
-        apiPauseMs: options.ozonApiPauseMs
+        apiPauseMs: options.ozonApiPauseMs,
+        knownReceipts: knownReceipts.ozon || [],
+        knownReceiptTail
       });
       return {
         rows: result.rows || [],
@@ -835,7 +843,9 @@ async function collectSpend({ sources, options }) {
       const result = await collectFromTab('wildberries', {
         maxPages: options.wbMaxPages,
         pageSize: options.wbPageSize,
-        apiPauseMs: options.wbApiPauseMs
+        apiPauseMs: options.wbApiPauseMs,
+        knownReceipts: knownReceipts.wildberries || [],
+        knownReceiptTail
       });
       return {
         rows: await rowsFromWbReceipts(result.receipts || [], options.wbReceiptConcurrency),
@@ -851,7 +861,9 @@ async function collectSpend({ sources, options }) {
         maxPages: options.yandexMaxPages,
         receiptConcurrency: options.yandexReceiptConcurrency,
         apiPauseMs: options.yandexApiPauseMs,
-        metadataOnly: true
+        metadataOnly: true,
+        knownOrderIds: knownReceipts.yandexOrders || [],
+        knownReceiptTail
       });
       try {
         const result = await collectYandexReceipts(metadata, {

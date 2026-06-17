@@ -54,8 +54,8 @@
       <section id="qualitySummary" class="quality-summary" hidden></section>
 
       <section class="toolbar">
-        <button id="uploadCsv" type="button" class="secondary">Загрузить CSV</button>
-        <input id="uploadCsvInput" type="file" accept=".csv,text/csv" hidden>
+        <button id="uploadCsv" type="button" class="secondary">Загрузить / объединить CSV</button>
+        <input id="uploadCsvInput" type="file" accept=".csv,text/csv" multiple hidden>
         <button id="downloadCsv" type="button" disabled>Скачать весь CSV</button>
       </section>
     </div>
@@ -64,7 +64,7 @@
 
     <nav class="view-tabs" aria-label="Разделы">
       <button class="tab-button active" type="button" data-view="analytics">Аналитика</button>
-      <button class="tab-button" type="button" data-view="log">Технический лог <span id="logBadge" class="tab-badge" hidden>0</span></button>
+      <button class="tab-button" type="button" data-view="log">Диагностика <span id="logBadge" class="tab-badge" hidden>0</span></button>
     </nav>
 
     <section id="analyticsView" class="analytics view-panel active" aria-label="Аналитика">
@@ -126,10 +126,10 @@
       <div class="analytics-empty">Выберите источники и нажмите «Собрать данные».</div>
 
       <div class="analytics-kpis">
-        <div><strong id="analyticsTotal">0</strong><span>потрачено</span><small id="analyticsTotalCompare"></small></div>
-        <div><strong id="analyticsAverage">0</strong><span id="analyticsAverageLabel">среднее за месяц</span></div>
-        <div><strong id="analyticsPurchases">0</strong><span id="analyticsPurchasesLabel">покупок</span></div>
-        <div><strong id="analyticsRefunds">0</strong><span>возвратами уменьшено</span></div>
+        <div><strong id="analyticsTotal">0</strong><span>итого</span><small id="analyticsTotalCompare"></small></div>
+        <div><strong id="analyticsAverage">0</strong><span id="analyticsAverageLabel">покупки</span></div>
+        <div><strong id="analyticsRefunds">0</strong><span>возвраты</span></div>
+        <div><strong id="analyticsPurchases">0</strong><span id="analyticsPurchasesLabel">операций</span></div>
       </div>
 
       <div class="analytics-layout">
@@ -137,7 +137,15 @@
           <div class="chart-panel">
             <div class="panel-head">
               <h3>Динамика расходов</h3>
-              <span id="chartRange"></span>
+              <div class="panel-head-actions">
+                <span id="chartRange"></span>
+                <span class="select-control compact-select">
+                  <select id="periodChartMode" aria-label="Разбивка динамики расходов">
+                    <option value="source" selected>Маркеты</option>
+                    <option value="category">Категории</option>
+                  </select>
+                </span>
+              </div>
             </div>
             <svg id="periodChart" viewBox="0 0 960 300" role="img" aria-label="График расходов по периодам"></svg>
           </div>
@@ -157,10 +165,22 @@
             </div>
             <div id="categoryBreakdown" class="category-breakdown"></div>
           </div>
+          <div class="chart-panel spend-report-panel">
+            <div class="panel-head">
+              <h3>Куда ушли деньги</h3>
+              <button id="copyReport" type="button" class="secondary category-toggle">Копировать</button>
+            </div>
+            <div id="spendReport" class="spend-report"></div>
+          </div>
           <div class="chart-panel">
             <div class="panel-head">
-              <h3 id="detailTitle">Детали покупок</h3>
+              <h3 id="detailTitle">Детали операций</h3>
               <div class="panel-head-actions">
+                <div class="detail-operation-tabs" role="group" aria-label="Тип операций">
+                  <button type="button" class="detail-operation active" data-operation="all">Все</button>
+                  <button type="button" class="detail-operation" data-operation="purchase">Покупки</button>
+                  <button type="button" class="detail-operation" data-operation="refund">Возвраты</button>
+                </div>
                 <input id="detailSearch" class="detail-search" type="search" placeholder="Поиск по товару" aria-label="Поиск по товару">
                 <label class="detail-page-size">
                   <span>Показывать</span>
@@ -181,6 +201,17 @@
         </div>
         <div class="analytics-side">
           <div class="chart-panel">
+            <h3>Бюджеты</h3>
+            <div class="budget-editor">
+              <span class="select-control">
+                <select id="budgetCategory" aria-label="Категория бюджета"></select>
+              </span>
+              <input id="budgetAmount" type="number" min="0" step="100" placeholder="Лимит, ₽" aria-label="Лимит бюджета">
+              <button id="saveBudget" type="button" class="secondary">Сохранить</button>
+            </div>
+            <div id="budgetBreakdown" class="budget-breakdown"></div>
+          </div>
+          <div class="chart-panel">
             <h3>Источники</h3>
             <div id="sourceBreakdown" class="breakdown"></div>
           </div>
@@ -192,9 +223,9 @@
       </div>
     </section>
 
-    <section id="logView" class="panel view-panel technical-log" aria-label="Технический лог">
+    <section id="logView" class="panel view-panel technical-log" aria-label="Диагностика">
       <div class="panel-head">
-        <h2>Технический лог</h2>
+        <h2>Диагностика</h2>
         <div class="panel-head-actions">
           <button id="copyLog" type="button" class="secondary">Копировать лог</button>
           <button id="clearLog" type="button" class="secondary">Очистить лог</button>
