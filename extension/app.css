@@ -76,6 +76,7 @@ main {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  align-items: center;
   justify-content: flex-end;
 }
 
@@ -307,6 +308,22 @@ button:disabled {
   opacity: 0.5;
 }
 
+.theme-toggle {
+  width: 42px;
+  min-width: 42px;
+  padding: 0;
+}
+
+.theme-toggle::before {
+  content: "☾";
+  font-size: 18px;
+  line-height: 1;
+}
+
+:root[data-theme="dark"] .theme-toggle::before {
+  content: "☼";
+}
+
 button:focus-visible,
 select:focus-visible,
 input[type="date"]:focus-visible,
@@ -420,6 +437,11 @@ input[type="number"] {
 
 .source-status.error {
   border-color: rgba(220, 38, 38, 0.48);
+  color: var(--text);
+}
+
+.source-status.warning {
+  border-color: rgba(234, 179, 8, 0.55);
   color: var(--text);
 }
 
@@ -673,8 +695,18 @@ progress::-moz-progress-bar {
   margin-top: 0;
 }
 
-.quick-period-field {
+.analytics-controls > .control-label {
+  flex-basis: 100%;
+  min-height: 20px;
+}
+
+.quick-period,
+#resetPeriod {
   display: none;
+}
+
+.quick-period-field {
+  display: inline-flex;
 }
 
 .active-filters {
@@ -747,6 +779,22 @@ progress::-moz-progress-bar {
   text-align: center;
 }
 
+.analytics-empty p {
+  max-width: none;
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.empty-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 16px;
+}
+
 body.has-data.has-visible-data .analytics-empty {
   display: none;
 }
@@ -762,7 +810,7 @@ body.has-data:not(.has-visible-data) .analytics-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.75fr);
   gap: 14px;
-  align-items: start;
+  align-items: stretch;
   margin-top: 14px;
 }
 
@@ -828,6 +876,11 @@ body.has-data:not(.has-visible-data) .analytics-layout {
   display: grid;
   min-width: 0;
   gap: 14px;
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.detail-panel {
+  grid-column: 1 / -1;
 }
 
 .breakdown {
@@ -1471,6 +1524,8 @@ pre {
   }
 
   .top-actions {
+    width: 100%;
+    flex-wrap: nowrap;
     justify-content: flex-start;
   }
 
@@ -1479,8 +1534,13 @@ pre {
     overflow-wrap: anywhere;
   }
 
-  .top-actions button {
-    flex: 1 1 100%;
+  .top-actions .theme-toggle {
+    flex: 0 0 42px;
+  }
+
+  .top-actions #collect {
+    flex: 1 1 0;
+    min-width: 0;
   }
 
   .sources,
@@ -1511,10 +1571,6 @@ pre {
   .analytics-controls > .check,
   .analytics-controls > .field {
     flex: 1 1 100%;
-  }
-
-  .quick-period {
-    display: none;
   }
 
   .quick-period-field {

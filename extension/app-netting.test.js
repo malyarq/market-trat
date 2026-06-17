@@ -134,3 +134,25 @@ vm.runInContext('rows = orderRecords', context);
 const orderedAnalytics = context.buildAnalyticsData(new Set(['ozon']), 'month');
 const categoryOrder = new Map(context.buildCategoryBreakdown(orderRecords).entries.map((item, index) => [item.category, index]));
 assert.equal(context.periodChartSegments(orderedAnalytics.periods[0], categoryOrder).map((item) => item.key).join(','), 'A,B');
+
+const exportRecords = [
+  { date: '2024-01-10', source: 'ozon', title: 'Jan', amount: '10.00', currency: 'RUB', category: 'A', type: 'purchase' },
+  { date: '2024-02-10', source: 'ozon', title: 'Feb Ozon', amount: '20.00', currency: 'RUB', category: 'A', type: 'purchase' },
+  { date: '2024-02-11', source: 'wildberries', title: 'Feb WB', amount: '30.00', currency: 'RUB', category: 'B', type: 'purchase' },
+  { date: '2024-03-10', source: 'yandex', title: 'Mar', amount: '40.00', currency: 'RUB', category: 'C', type: 'purchase' }
+];
+context.exportRecords = exportRecords;
+vm.runInContext('rows = exportRecords', context);
+element('dateFrom').value = '2024-02-01';
+element('dateTo').value = '2024-02-29';
+element('analyticsOzon').checked = true;
+element('analyticsWb').checked = false;
+element('analyticsYandex').checked = true;
+assert.deepEqual(context.csvExportRows().map((row) => row.title), ['Feb Ozon']);
+assert.equal(context.csvExportSuffix(), '2024-02-01_2024-02-29');
+
+const diagnostic = context.sourceDiagnostic('ozon', {
+  ozon: { receipts: 18, parsedReceipts: 17, failedReceipts: 1, itemRows: 42 }
+});
+assert.equal(diagnostic.label, '17/18 чеков');
+assert.ok(diagnostic.title.includes('пропущено 1'));

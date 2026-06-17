@@ -14,7 +14,7 @@
         <p>Расходы из чеков Ozon, Wildberries и Яндекс Маркета в один CSV.</p>
       </div>
       <div class="top-actions">
-        <button id="themeToggle" type="button" class="secondary">Тёмная тема</button>
+        <button id="themeToggle" type="button" class="secondary theme-toggle" aria-label="Тёмная тема"></button>
         <button id="collect" type="button">Собрать данные</button>
       </div>
     </header>
@@ -71,6 +71,18 @@
       <div class="analytics-titlebar">
         <h2>Аналитика</h2>
         <div class="analytics-controls">
+          <label class="field quick-period-field">
+            <span>Период</span>
+            <span class="select-control">
+              <select id="quickPeriodSelect">
+                <option value="all">Весь период</option>
+                <option value="this-month">Этот месяц</option>
+                <option value="prev-month">Прошлый месяц</option>
+                <option value="this-year">Этот год</option>
+                <option value="custom">Свой период</option>
+              </select>
+            </span>
+          </label>
           <label class="field">
             <span>Группировать</span>
             <span class="select-control">
@@ -94,18 +106,6 @@
           <button type="button" class="secondary quick-period" data-period="prev-month">Прошлый месяц</button>
           <button type="button" class="secondary quick-period" data-period="this-year">Этот год</button>
           <button id="resetPeriod" type="button" class="secondary">Весь период</button>
-          <label class="field quick-period-field">
-            <span>Период</span>
-            <span class="select-control">
-              <select id="quickPeriodSelect">
-                <option value="all">Весь период</option>
-                <option value="this-month">Этот месяц</option>
-                <option value="prev-month">Прошлый месяц</option>
-                <option value="this-year">Этот год</option>
-                <option value="custom">Свой период</option>
-              </select>
-            </span>
-          </label>
           <span class="control-label">Фильтр отчёта</span>
           <label class="check">
             <input id="analyticsOzon" type="checkbox" checked>
@@ -123,12 +123,18 @@
       </div>
       <div id="activeFilters" class="active-filters"></div>
 
-      <div class="analytics-empty">Выберите источники и нажмите «Собрать данные».</div>
+      <div class="analytics-empty">
+        <p id="analyticsEmptyText">Выберите источники и нажмите «Собрать данные».</p>
+        <div id="analyticsEmptyActions" class="empty-actions">
+          <button id="emptyCollect" type="button">Собрать данные</button>
+          <button id="emptyUploadCsv" type="button" class="secondary">Загрузить CSV</button>
+        </div>
+      </div>
 
       <div class="analytics-kpis">
-        <div><strong id="analyticsTotal">0</strong><span>итого</span><small id="analyticsTotalCompare"></small></div>
-        <div><strong id="analyticsAverage">0</strong><span id="analyticsAverageLabel">покупки</span></div>
-        <div><strong id="analyticsRefunds">0</strong><span>возвраты</span></div>
+        <div><strong id="analyticsTotal">0</strong><span>итого, ₽</span><small id="analyticsTotalCompare"></small></div>
+        <div><strong id="analyticsAverage">0</strong><span id="analyticsAverageLabel">покупки, ₽</span></div>
+        <div><strong id="analyticsRefunds">0</strong><span>возвраты, ₽</span></div>
         <div><strong id="analyticsPurchases">0</strong><span id="analyticsPurchasesLabel">операций</span></div>
       </div>
 
@@ -172,34 +178,16 @@
             </div>
             <div id="spendReport" class="spend-report"></div>
           </div>
-          <div class="chart-panel">
-            <div class="panel-head">
-              <h3 id="detailTitle">Детали операций</h3>
-              <div class="panel-head-actions">
-                <div class="detail-operation-tabs" role="group" aria-label="Тип операций">
-                  <button type="button" class="detail-operation active" data-operation="all">Все</button>
-                  <button type="button" class="detail-operation" data-operation="purchase">Покупки</button>
-                  <button type="button" class="detail-operation" data-operation="refund">Возвраты</button>
-                </div>
-                <input id="detailSearch" class="detail-search" type="search" placeholder="Поиск по товару" aria-label="Поиск по товару">
-                <label class="detail-page-size">
-                  <span>Показывать</span>
-                  <select id="detailPageSize" aria-label="Сколько покупок показывать">
-                    <option value="60" selected>60</option>
-                    <option value="100">100</option>
-                    <option value="200">200</option>
-                    <option value="all">Все</option>
-                  </select>
-                </label>
-                <span id="detailSummary"></span>
-                <button id="clearDetailFilter" type="button" class="secondary category-toggle" hidden>Сбросить</button>
-              </div>
-            </div>
-            <div id="detailRows" class="detail-rows"></div>
-            <button id="detailMore" type="button" class="secondary detail-more" hidden>Показать ещё</button>
-          </div>
         </div>
         <div class="analytics-side">
+          <div class="chart-panel">
+            <h3>Источники</h3>
+            <div id="sourceBreakdown" class="breakdown"></div>
+          </div>
+          <div class="chart-panel">
+            <h3>Топ трат</h3>
+            <ol id="topItems" class="top-items"></ol>
+          </div>
           <div class="chart-panel">
             <h3>Бюджеты</h3>
             <div class="budget-editor">
@@ -211,14 +199,32 @@
             </div>
             <div id="budgetBreakdown" class="budget-breakdown"></div>
           </div>
-          <div class="chart-panel">
-            <h3>Источники</h3>
-            <div id="sourceBreakdown" class="breakdown"></div>
+        </div>
+        <div class="chart-panel detail-panel">
+          <div class="panel-head">
+            <h3 id="detailTitle">Детали операций</h3>
+            <div class="panel-head-actions">
+              <div class="detail-operation-tabs" role="group" aria-label="Тип операций">
+                <button type="button" class="detail-operation active" data-operation="all">Все</button>
+                <button type="button" class="detail-operation" data-operation="purchase">Покупки</button>
+                <button type="button" class="detail-operation" data-operation="refund">Возвраты</button>
+              </div>
+              <input id="detailSearch" class="detail-search" type="search" placeholder="Поиск по товару" aria-label="Поиск по товару">
+              <label class="detail-page-size">
+                <span>Показывать</span>
+                <select id="detailPageSize" aria-label="Сколько покупок показывать">
+                  <option value="60" selected>60</option>
+                  <option value="100">100</option>
+                  <option value="200">200</option>
+                  <option value="all">Все</option>
+                </select>
+              </label>
+              <span id="detailSummary"></span>
+              <button id="clearDetailFilter" type="button" class="secondary category-toggle" hidden>Сбросить</button>
+            </div>
           </div>
-          <div class="chart-panel">
-            <h3>Топ трат</h3>
-            <ol id="topItems" class="top-items"></ol>
-          </div>
+          <div id="detailRows" class="detail-rows"></div>
+          <button id="detailMore" type="button" class="secondary detail-more" hidden>Показать ещё</button>
         </div>
       </div>
     </section>

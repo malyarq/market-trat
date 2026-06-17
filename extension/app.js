@@ -47,6 +47,10 @@ const els = {
   analyticsYandex: document.getElementById('analyticsYandex'),
   activeFilters: document.getElementById('activeFilters'),
   analyticsEmpty: document.querySelector('.analytics-empty'),
+  analyticsEmptyText: document.getElementById('analyticsEmptyText'),
+  analyticsEmptyActions: document.getElementById('analyticsEmptyActions'),
+  emptyCollect: document.getElementById('emptyCollect'),
+  emptyUploadCsv: document.getElementById('emptyUploadCsv'),
   analyticsTotal: document.getElementById('analyticsTotal'),
   analyticsTotalCompare: document.getElementById('analyticsTotalCompare'),
   analyticsAverage: document.getElementById('analyticsAverage'),
@@ -309,7 +313,9 @@ function loadTheme() {
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
-  els.themeToggle.textContent = theme === 'dark' ? 'Светлая тема' : 'Тёмная тема';
+  const label = theme === 'dark' ? 'Светлая тема' : 'Тёмная тема';
+  els.themeToggle.setAttribute('aria-label', label);
+  els.themeToggle.title = label;
   localStorage.setItem(themeStorageKey, theme);
   updateAnalytics();
 }
@@ -391,10 +397,11 @@ function setCollectStatus(source, state, label, title = '') {
 }
 
 function updateCsvButton() {
-  const text = 'Скачать весь CSV';
-  els.downloadCsv.disabled = rows.length === 0;
+  const records = csvExportRows();
+  const text = csvExportIsFiltered() ? `Скачать CSV выборки (${records.length})` : 'Скачать весь CSV';
+  els.downloadCsv.disabled = records.length === 0;
   els.downloadCsv.textContent = text;
-  els.runDownloadCsv.disabled = rows.length === 0;
+  els.runDownloadCsv.disabled = records.length === 0;
   els.runDownloadCsv.textContent = text;
 }
 
@@ -587,6 +594,43 @@ function unreadReceiptCount(stats = {}) {
   }, 0);
 }
 
+function sourceDiagnostic(source, stats = {}) {
+  const item = stats[source] || {};
+  const receipts = Number(item.receipts) || 0;
+  const parsed = Number(item.parsedReceipts) || 0;
+  const itemRows = Number(item.itemRows) || 0;
+  const failedReceipts = Number(item.failedReceipts) || Math.max(0, receipts - parsed);
+  const dropped = ['duplicateRowsDropped', 'prepaymentRowsDropped', 'operationalRowsDropped', 'adjustmentRowsDropped']
+    .reduce((sum, key) => sum + (Number(item[key]) || 0), 0);
+
+  if (source === 'yandex') {
+    const orders = Number(item.orders) || 0;
+    const skipped = failedReceipts + (Number(item.noReceiptOrders) || 0) + (Number(item.failedOrders) || 0);
+    if (!orders && !receipts && !itemRows && !skipped) return null;
+    return {
+      label: receipts ? `${parsed}/${receipts} чеков` : `${orders} заказов`,
+      title: `Яндекс Маркет: найдено заказов ${orders}, чеков ${receipts}, распознано ${parsed}, пропущено ${skipped}, строк ${itemRows}.`,
+      warning: skipped > 0
+    };
+  }
+
+  if (source === 'wildberries') {
+    if (!receipts && !itemRows) return null;
+    return {
+      label: `${receipts} чеков, ${itemRows} строк`,
+      title: `Wildberries: найдено чеков ${receipts}, распознано ${receipts}, пропущено 0, строк ${itemRows}.`,
+      warning: false
+    };
+  }
+
+  if (!receipts && !itemRows && !failedReceipts && !dropped) return null;
+  return {
+    label: receipts ? `${parsed}/${receipts} чеков` : `${itemRows} строк`,
+    title: `Ozon: найдено чеков ${receipts}, распознано ${parsed}, пропущено ${failedReceipts}, строк ${itemRows}${dropped ? `, отброшено строк ${dropped}` : ''}.`,
+    warning: failedReceipts > 0
+  };
+}
+
 function renderQualitySummary(rawRecords = [], stats = {}, cleaningStats = {}, warnings = []) {
   clearNode(els.qualitySummary);
   const hasAnything = rawRecords.length || rows.length || warnings.length;
@@ -758,6 +802,11 @@ function isServiceRow(row) {
 }
 
 function logParserStats(stats = {}) {
+  for (const source of ['ozon', 'wildberries', 'yandex']) {
+    const diagnostic = sourceDiagnostic(source, stats);
+    if (diagnostic) appendLog(`Итог ${diagnostic.title}`, `diagnostic-${source}`);
+  }
+
   const ozon = stats.ozon || {};
   const wb = stats.wildberries || {};
   const yandex = stats.yandex || {};
@@ -1047,6 +1096,32 @@ function selectedDateRange() {
     from: dateInputValue(els.dateFrom.value),
     to: dateInputValue(els.dateTo.value)
   };
+}
+
+function csvExportIsFiltered() {
+  const range = selectedDateRange();
+  return range.from !== null
+    || range.to !== null
+    || selectedAnalyticsSources().size !== collectSourceInputs.length;
+}
+
+function csvExportRows() {
+  const sources = selectedAnalyticsSources();
+  const range = selectedDateRange();
+  const hasDateFilter = range.from !== null || range.to !== null;
+  return rows.filter((row) => {
+    if (!sources.has(row.source)) return false;
+    if (!hasDateFilter) return true;
+    const date = parseRowDate(row.date);
+    return date && isDateInRange(date, range);
+  });
+}
+
+function csvExportSuffix() {
+  const range = selectedDateRange();
+  const from = els.dateFrom.value || 'start';
+  const to = els.dateTo.value || 'today';
+  return range.from !== null || range.to !== null ? `${from}_${to}` : new Date().toISOString().slice(0, 10);
 }
 
 function isDateInRange(date, range) {
@@ -2101,9 +2176,10 @@ function updateAnalytics() {
   document.body.classList.toggle('has-visible-data', records.length > 0);
 
   renderActiveFilters(sources);
-  els.analyticsEmpty.textContent = hasCollected
+  els.analyticsEmptyText.textContent = hasCollected
     ? (sources.size ? 'За выбранный период операций нет.' : 'В фильтре отчёта выключены все источники.')
     : 'Выберите маркетплейсы сверху и нажмите «Собрать данные». В этом профиле браузера нужно быть залогиненным в выбранные магазины.';
+  els.analyticsEmptyActions.hidden = hasCollected;
 
   els.analyticsTotal.textContent = formatRub(total);
   const comparison = prevRange ? compareText(total, prevTotal) : '';
@@ -2112,7 +2188,7 @@ function updateAnalytics() {
     ? 'up'
     : (comparison.startsWith('-') ? 'down' : '');
   els.analyticsAverage.textContent = formatRub(purchases);
-  els.analyticsAverageLabel.textContent = 'покупки';
+  els.analyticsAverageLabel.textContent = 'покупки, ₽';
   els.analyticsPurchases.textContent = String(records.length);
   els.analyticsPurchasesLabel.textContent = pluralRu(records.length, ['операция', 'операции', 'операций']);
   els.analyticsRefunds.textContent = formatRub(refunds);
@@ -2126,6 +2202,7 @@ function updateAnalytics() {
   renderBudgets(records);
   renderTopItems(records);
   renderDetails(records, group);
+  updateCsvButton();
 }
 
 function updateResult(records, stats = {}) {
@@ -2153,16 +2230,18 @@ function updateResult(records, stats = {}) {
 }
 
 function downloadCsv() {
-  if (!csvText) return;
-  const date = new Date().toISOString().slice(0, 10);
-  const url = URL.createObjectURL(new Blob([csvText], { type: 'text/csv;charset=utf-8' }));
+  const records = csvExportRows();
+  if (!records.length) return;
+  const exportText = makeCsv(records);
+  const url = URL.createObjectURL(new Blob([exportText], { type: 'text/csv;charset=utf-8' }));
   const a = document.createElement('a');
   a.href = url;
-  a.download = `markettrat-${date}.csv`;
+  a.download = `markettrat-${csvExportSuffix()}.csv`;
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+  appendLog(`CSV экспорт: строк ${records.length}${csvExportIsFiltered() ? ', применён фильтр отчёта' : ''}.`);
 }
 
 async function copyLog() {
@@ -2286,7 +2365,12 @@ async function collect() {
     showWarnings(warnings);
     for (const warning of warnings) appendLog(`Предупреждение: ${warning}`);
     for (const source of sources) {
-      if (collectStatuses[source]?.state !== 'error') setCollectStatus(source, 'done', 'готово');
+      if (collectStatuses[source]?.state === 'error') continue;
+      const failed = warnings.find((warning) => sourceFromProgress(warning) === source);
+      const diagnostic = sourceDiagnostic(source, response.stats || {});
+      if (failed) setCollectStatus(source, 'error', 'ошибка', failed);
+      else if (diagnostic) setCollectStatus(source, diagnostic.warning ? 'warning' : 'done', diagnostic.label, diagnostic.title);
+      else setCollectStatus(source, 'done', 'готово');
     }
     finishRun(isUpdateRun ? 'Обновлено' : 'Собрано', warnings.length);
     const downloadStatus = rows.length ? 'CSV готов к скачиванию' : 'строк для CSV нет';
@@ -2327,7 +2411,9 @@ api?.runtime?.onMessage?.addListener?.((message) => {
 });
 
 els.collect.addEventListener('click', collect);
+els.emptyCollect.addEventListener('click', () => els.collect.click());
 els.uploadCsv.addEventListener('click', () => els.uploadCsvInput.click());
+els.emptyUploadCsv.addEventListener('click', () => els.uploadCsv.click());
 els.uploadCsvInput.addEventListener('change', () => {
   uploadCsv().catch((error) => appendLog(`Ошибка загрузки CSV: ${error.message}`));
 });
