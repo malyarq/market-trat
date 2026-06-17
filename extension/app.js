@@ -52,6 +52,7 @@ const els = {
   emptyCollect: document.getElementById('emptyCollect'),
   emptyUploadCsv: document.getElementById('emptyUploadCsv'),
   analyticsTotal: document.getElementById('analyticsTotal'),
+  analyticsTotalLabel: document.getElementById('analyticsTotalLabel'),
   analyticsTotalCompare: document.getElementById('analyticsTotalCompare'),
   analyticsAverage: document.getElementById('analyticsAverage'),
   analyticsAverageLabel: document.getElementById('analyticsAverageLabel'),
@@ -131,31 +132,31 @@ const categoryLabels = {
   unknown: 'Без категории'
 };
 const categoryColors = {
-  'Авто': '#f97316',
+  'Авто': '#ff8a00',
   'Аксессуары': '#64748b',
-  'Благотворительность': '#10b981',
-  'Бытовая химия': '#14b8a6',
-  'Бытовая техника': '#0ea5e9',
-  'Дом': '#8b5cf6',
-  'Детям': '#ec4899',
-  'Здоровье': '#22c55e',
-  'Зоотовары': '#a16207',
-  'Интимные товары': '#be123c',
-  'Канцтовары': '#64748b',
-  'Книги': '#0ea5e9',
-  'Красота и уход': '#d946ef',
-  'Одежда': '#06b6d4',
-  'Обувь': '#6366f1',
-  'Подписки': '#7c3aed',
-  'Продукты': '#84cc16',
-  'Ремонт': '#eab308',
+  'Благотворительность': '#22c55e',
+  'Бытовая химия': '#7ed957',
+  'Бытовая техника': '#00a6d6',
+  'Дом': '#9b5de5',
+  'Детям': '#ff6b9a',
+  'Здоровье': '#00b894',
+  'Зоотовары': '#b7791f',
+  'Интимные товары': '#e11d48',
+  'Канцтовары': '#94a3b8',
+  'Книги': '#0ea5a5',
+  'Красота и уход': '#ff4fa3',
+  'Одежда': '#9c6b3d',
+  'Обувь': '#4f46e5',
+  'Подписки': '#c026d3',
+  'Продукты': '#6cc24a',
+  'Ремонт': '#f6c000',
   'Сад': '#16a34a',
   'Спорт': '#ef4444',
-  'Хобби и творчество': '#a855f7',
-  'Электроника': '#3b82f6',
+  'Хобби и творчество': '#b832e6',
+  'Электроника': '#2f80ed',
   'Игрушки': '#f59e0b',
-  other: '#475467',
-  unknown: '#94a3b8'
+  other: '#6b7280',
+  unknown: '#a8b0bf'
 };
 const svgNamespace = 'http://www.w3.org/2000/svg';
 const amountFormatter = new Intl.NumberFormat('ru-RU', {
@@ -523,7 +524,12 @@ function showUpdateBanner(version) {
   link.target = '_blank';
   link.rel = 'noopener noreferrer';
   link.textContent = 'Скачать обновление';
-  els.updateBanner.append(text, link);
+  const help = document.createElement('a');
+  help.href = globalThis.MarketTratUpdate.updateHelpUrl;
+  help.target = '_blank';
+  help.rel = 'noopener noreferrer';
+  help.textContent = 'Как обновиться';
+  els.updateBanner.append(text, link, help);
   els.updateBanner.hidden = false;
 }
 
@@ -936,6 +942,16 @@ function detailFilterName() {
   return '';
 }
 
+function analyticsScopeName() {
+  if (!detailFilter || detailFilter.type === 'period') return '';
+  if (detailFilter.type === 'source') return sourceLabels[detailFilter.source] || detailFilter.source;
+  if (detailFilter.type === 'category' || detailFilter.type === 'categories') {
+    return detailFilter.label || categoryName(detailFilter.category);
+  }
+  if (detailFilter.type === 'item') return detailFilter.label || detailFilter.title;
+  return '';
+}
+
 function renderActiveFilters(sources) {
   clearNode(els.activeFilters);
   const period = els.dateFrom.value || els.dateTo.value
@@ -1187,19 +1203,6 @@ function updateDateInputBounds() {
   syncDateInputs();
 }
 
-function selectedRefundTotal(sources, range) {
-  return selectedRefundRows(sources, range).reduce((sum, refund) => sum + Math.abs(rowAmount(refund)), 0);
-}
-
-function selectedRefundRows(sources, range) {
-  return rows.filter((refund) => {
-    if (!sources.has(refund.source)) return false;
-    if (!isRefundRow(refund)) return false;
-    const date = parseRowDate(refund.date);
-    return date && isDateInRange(date, range);
-  });
-}
-
 function averageForPeriods(total, periods) {
   return periods.length ? total / periods.length : 0;
 }
@@ -1213,20 +1216,23 @@ function averagePeriodLabel(group) {
   })[group] || 'в среднем';
 }
 
-function totalForRange(sources, range) {
+function totalForRange(sources, range, group) {
   return rows.reduce((sum, row) => {
     if (!sources.has(row.source)) return sum;
     const date = parseRowDate(row.date);
     if (!date || !isDateInRange(date, range)) return sum;
+    if (!matchesAnalyticsFilter(row, group)) return sum;
     return sum + (Number(row.amount) || 0);
   }, 0);
 }
 
-function recordsForRange(sources, range) {
+function recordsForRange(sources, range, group, ignoreCategoryFilter = false) {
   return rows.filter((row) => {
     if (!sources.has(row.source)) return false;
     const date = parseRowDate(row.date);
-    return date && isDateInRange(date, range);
+    return date
+      && isDateInRange(date, range)
+      && matchesAnalyticsFilter(row, group, ignoreCategoryFilter);
   });
 }
 
@@ -1249,7 +1255,7 @@ function compareText(current, previous) {
   return `${percent > 0 ? '+' : ''}${percent}% к прошлому периоду`;
 }
 
-function buildAnalyticsData(sources, group) {
+function buildAnalyticsData(sources, group, ignoreCategoryFilter = false) {
   const range = selectedDateRange();
   const records = [];
   const periods = new Map();
@@ -1260,6 +1266,7 @@ function buildAnalyticsData(sources, group) {
     const date = parseRowDate(row.date);
     if (!date) continue;
     if (!isDateInRange(date, range)) continue;
+    if (!matchesAnalyticsFilter(row, group, ignoreCategoryFilter)) continue;
 
     const key = periodKey(date, group);
     if (!periods.has(key)) {
@@ -1284,7 +1291,6 @@ function buildAnalyticsData(sources, group) {
     else item.refunds += Math.abs(amount);
     item.rows += 1;
   }
-
   return {
     records,
     range,
@@ -1311,10 +1317,11 @@ function cssVar(name, fallback) {
 function periodChartSegments(item, categoryOrder = new Map()) {
   const mode = els.periodChartMode.value;
   const values = mode === 'category' ? item.byCategory : item.bySource;
+  const sourceOrder = new Map(collectSourceInputs.map(([source], index) => [source, index]));
   return Object.entries(values || {})
     .filter(([, amount]) => amount > 0)
     .sort((a, b) => {
-      if (mode !== 'category') return b[1] - a[1];
+      if (mode !== 'category') return (sourceOrder.get(a[0]) ?? 99) - (sourceOrder.get(b[0]) ?? 99);
       const left = categoryOrder.get(a[0]) ?? Number.MAX_SAFE_INTEGER;
       const right = categoryOrder.get(b[0]) ?? Number.MAX_SAFE_INTEGER;
       return left - right || b[1] - a[1];
@@ -1424,7 +1431,6 @@ function renderPeriodChart(periods, categoryOrder = new Map()) {
         y: item.total >= 0 ? y : baseline,
         width: barWidth,
         height: Math.max(1, Math.abs(baseline - y)),
-        rx: 3,
         fill: dangerColor,
         stroke: selectedPeriodKey === item.key ? borderStrongColor : 'none',
         'stroke-width': selectedPeriodKey === item.key ? 2 : 0
@@ -1445,7 +1451,6 @@ function renderPeriodChart(periods, categoryOrder = new Map()) {
           y: yTop,
           width: barWidth,
           height: Math.max(1, yBottom - yTop),
-          rx: 3,
           fill: segment.color,
           stroke: selectedPeriodKey === item.key ? borderStrongColor : 'none',
           'stroke-width': selectedPeriodKey === item.key ? 2 : 0
@@ -1597,9 +1602,47 @@ function categoryDrillFilter(item) {
     : { type: 'category', category: item.category, label: item.label || categoryName(item.category) };
 }
 
+function categoryFilterCategories(filter = detailFilter) {
+  if (filter?.type === 'category') return [filter.category];
+  if (filter?.type === 'categories') return filter.categories || [];
+  return [];
+}
+
+function categoryListLabel(categories) {
+  const labels = categories.map(categoryName);
+  return labels.length <= 3 ? labels.join(', ') : `${labels.slice(0, 3).join(', ')} +${labels.length - 3}`;
+}
+
+function categoryFilterFrom(categories) {
+  if (!categories.length) return null;
+  if (categories.length === 1) {
+    return { type: 'category', category: categories[0], label: categoryName(categories[0]) };
+  }
+  return { type: 'categories', categories, label: categoryListLabel(categories) };
+}
+
+function toggleCategoryFilter(item) {
+  const nextCategories = categoryFilterCategories(categoryDrillFilter(item));
+  const currentCategories = categoryFilterCategories();
+  if (!currentCategories.length) return categoryDrillFilter(item);
+
+  const selected = new Set(currentCategories);
+  for (const category of nextCategories) {
+    if (selected.has(category)) selected.delete(category);
+    else selected.add(category);
+  }
+  return categoryFilterFrom([...selected]);
+}
+
+function categoryIsSelected(item) {
+  const selected = new Set(categoryFilterCategories());
+  const categories = item.categories?.length ? item.categories : [item.category];
+  return categories.some((category) => selected.has(category));
+}
+
 function createCategoryRow(item, total, max, showBar) {
   const row = document.createElement('div');
-  row.className = 'category-row';
+  row.className = categoryIsSelected(item) ? 'category-row selected' : 'category-row';
   row.style.setProperty('--category-color', categoryColor(item.category));
 
   const head = document.createElement('div');
@@ -1630,7 +1673,7 @@ function createCategoryRow(item, total, max, showBar) {
     row.appendChild(bar);
   }
 
-  makeClickable(row, () => setDetailFilter(categoryDrillFilter(item), true));
+  makeClickable(row, () => setDetailFilter(toggleCategoryFilter(item), true));
   return row;
 }
 
@@ -1640,12 +1683,12 @@ function renderCategoryBars(entries, total) {
   for (const item of entries) {
     const percent = total ? (item.amount / total) * 100 : 0;
     const segment = document.createElement('span');
-    segment.className = 'category-strip-segment';
+    segment.className = categoryIsSelected(item) ? 'category-strip-segment selected' : 'category-strip-segment';
     segment.style.width = `${Math.max(2, percent)}%`;
     segment.style.background = categoryColor(item.category);
     segment.title = `${item.label || categoryName(item.category)}: ${Math.round(percent)}%`;
     segment.setAttribute('aria-label', `Показать покупки: ${item.label || categoryName(item.category)}`);
-    makeClickable(segment, () => setDetailFilter(categoryDrillFilter(item), true));
+    makeClickable(segment, () => setDetailFilter(toggleCategoryFilter(item), true));
     strip.appendChild(segment);
   }
   els.categoryBreakdown.appendChild(strip);
@@ -1723,7 +1766,7 @@ function renderCategoryTiles(entries, total) {
   grid.className = 'category-tiles';
   for (const item of entries) {
     const tile = document.createElement('div');
-    tile.className = 'category-tile';
+    tile.className = categoryIsSelected(item) ? 'category-tile selected' : 'category-tile';
     tile.style.setProperty('--category-color', categoryColor(item.category));
     const name = document.createElement('strong');
     name.textContent = item.label || categoryName(item.category);
@@ -1732,6 +1775,7 @@ function renderCategoryTiles(entries, total) {
     const meta = document.createElement('small');
     meta.textContent = `${total ? Math.round((item.amount / total) * 100) : 0}% · ${formatCount(item.count, ['покупка', 'покупки', 'покупок'])}`;
     tile.append(name, amount, meta);
+    makeClickable(tile, () => setDetailFilter(toggleCategoryFilter(item), true));
     grid.appendChild(tile);
   }
   els.categoryBreakdown.appendChild(grid);
@@ -2035,8 +2079,8 @@ function renderTopItems(records) {
 function matchesDetailFilter(row, group) {
   if (!detailFilter) return true;
   if (detailFilter.type === 'source') return row.source === detailFilter.source;
-  if (detailFilter.type === 'category') return row.category === detailFilter.category;
-  if (detailFilter.type === 'categories') return detailFilter.categories.includes(row.category);
+  if (detailFilter.type === 'category') return (row.category || 'unknown') === detailFilter.category;
+  if (detailFilter.type === 'categories') return detailFilter.categories.includes(row.category || 'unknown');
   if (detailFilter.type === 'item') {
     return row.source === detailFilter.source
       && normalizeKeyText(row.title) === normalizeKeyText(detailFilter.title);
@@ -2046,6 +2090,12 @@ function matchesDetailFilter(row, group) {
     return date && periodKey(date, group) === detailFilter.key;
   }
   return true;
+}
+
+function matchesAnalyticsFilter(row, group, ignoreCategoryFilter = false) {
+  if (!detailFilter || detailFilter.type === 'period') return true;
+  if (ignoreCategoryFilter && (detailFilter.type === 'category' || detailFilter.type === 'categories')) return true;
+  return matchesDetailFilter(row, group);
 }
 
 function matchesOperation(row) {
@@ -2205,11 +2255,11 @@ function updateAnalytics() {
   syncDateInputs();
   const sources = selectedAnalyticsSources();
   const group = els.periodGroup.value;
+  const baseAnalytics = buildAnalyticsData(sources, group, true);
   const { records, periods, total, range } = buildAnalyticsData(sources, group);
-  const refunds = selectedRefundTotal(sources, range);
+  const refunds = records.filter(isRefundRow).reduce((sum, refund) => sum + Math.abs(rowAmount(refund)), 0);
   const prevRange = previousRange(range);
-  const prevTotal = prevRange ? totalForRange(sources, prevRange) : 0;
-  const previousRecords = prevRange ? recordsForRange(sources, prevRange) : [];
+  const prevTotal = prevRange ? totalForRange(sources, prevRange, group) : 0;
 
   document.body.classList.toggle('has-visible-data', records.length > 0);
 
@@ -2220,13 +2270,15 @@ function updateAnalytics() {
   els.analyticsEmptyActions.hidden = hasCollected;
 
   els.analyticsTotal.textContent = formatRub(total);
+  const scope = analyticsScopeName();
+  els.analyticsTotalLabel.textContent = scope ? `итого: ${scope}` : 'итого, ₽';
   const comparison = prevRange ? compareText(total, prevTotal) : '';
   els.analyticsTotalCompare.textContent = comparison;
   els.analyticsTotalCompare.className = comparison.startsWith('+')
     ? 'up'
     : (comparison.startsWith('-') ? 'down' : '');
   els.analyticsAverage.textContent = formatRub(averageForPeriods(total, periods));
-  els.analyticsAverageLabel.textContent = averagePeriodLabel(group);
+  els.analyticsAverageLabel.textContent = `${averagePeriodLabel(group)}${scope ? `: ${scope}` : ''}`;
   els.analyticsPurchases.textContent = String(records.length);
   els.analyticsPurchasesLabel.textContent = pluralRu(records.length, ['операция', 'операции', 'операций']);
   els.analyticsRefunds.textContent = formatRub(refunds);
@@ -2235,7 +2287,7 @@ function updateAnalytics() {
   const categoryOrder = new Map(buildCategoryBreakdown(records).entries.map((item, index) => [item.category, index]));
   renderPeriodChart(periods, categoryOrder);
   renderSourceBreakdown(records);
-  renderCategoryBreakdown(records, previousRecords);
+  renderCategoryBreakdown(baseAnalytics.records, prevRange ? recordsForRange(sources, prevRange, group, true) : []);
   renderSpendReport(records, periods, sources, range, prevRange ? prevTotal : null, refunds);
   renderBudgets(records);
   renderTopItems(records);

@@ -965,6 +965,10 @@ body.has-data:not(.has-visible-data) .analytics-layout {
   height: 100%;
 }
 
+.category-strip-segment.selected {
+  box-shadow: inset 0 0 0 2px var(--text);
+}
+
 .category-row {
   display: grid;
   gap: 6px;
@@ -996,6 +1000,10 @@ body.has-data:not(.has-visible-data) .analytics-layout {
   height: 10px;
   border-radius: 3px;
   background: var(--category-color);
+}
+
+.category-row.selected .category-swatch {
+  box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--category-color);
 }
 
 .category-name {
@@ -1062,6 +1070,10 @@ body.has-data:not(.has-visible-data) .analytics-layout {
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--category-color), transparent 84%), transparent 58%),
     var(--panel-strong);
+}
+
+.category-tile.selected {
+  box-shadow: inset 0 0 0 2px var(--category-color);
 }
 
 .category-tile strong,

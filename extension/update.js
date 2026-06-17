@@ -2,6 +2,7 @@
   const releaseApiUrl = 'https://api.github.com/repos/malyarq/market-trat/releases/latest';
   const categoryPackApiUrl = 'https://api.github.com/repos/malyarq/market-trat/contents/extension/category-rules.json?ref=main';
   const latestReleaseUrl = 'https://github.com/malyarq/market-trat/releases/latest';
+  const updateHelpUrl = 'https://github.com/malyarq/market-trat#%D0%BE%D0%B1%D0%BD%D0%BE%D0%B2%D0%BB%D0%B5%D0%BD%D0%B8%D0%B5';
 
   function normalizeVersion(value) {
     return String(value || '').trim().replace(/^v/i, '');
@@ -39,6 +40,7 @@
     releaseApiUrl,
     categoryPackApiUrl,
     latestReleaseUrl,
+    updateHelpUrl,
     normalizeVersion,
     compareVersions,
     isNewerVersion,

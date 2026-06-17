@@ -1,12 +1,11 @@
 {
   "manifest_version": 3,
   "name": "MarketTrat",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Собирает расходы из чеков Ozon, Wildberries и Яндекс Маркета, учитывает возвраты и экспортирует CSV.",
   "permissions": [
     "activeTab",
     "cookies",
-    "downloads",
     "scripting",
     "tabs"
   ],
